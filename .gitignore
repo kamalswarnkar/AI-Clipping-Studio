@@ -1,0 +1,31 @@
+# Runtime data (uploads, renders, exports, sqlite db)
+/data/
+# Bundled binaries
+/tools/
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+# Node
+node_modules/
+frontend/dist/
+# Env / secrets
+.env
+.env.local
+# OS / editors
+Thumbs.db
+.DS_Store
+.idea/
+.vscode/
+
+# Build/test caches
+.pytest_cache/
+frontend/tsconfig.tsbuildinfo
+sample.mp4 
+hooks.txt 
+caption.txt 
+Memory.md 
+examples/ 

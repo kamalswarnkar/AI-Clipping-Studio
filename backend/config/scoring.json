@@ -1,0 +1,11 @@
+{
+  "content_clarity": 0.20,
+  "standalone_completeness": 0.20,
+  "narrative_structure": 0.15,
+  "visual_interest": 0.10,
+  "audio_dynamics": 0.10,
+  "emotional_reaction": 0.10,
+  "information_density": 0.05,
+  "opening_strength": 0.05,
+  "ending_payoff": 0.05
+}

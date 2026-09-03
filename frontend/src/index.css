@@ -1,0 +1,74 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    @apply bg-ink-950 text-ink-100 antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  /* Restrained focus ring: visible for keyboard users, quiet otherwise. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-accent/60 ring-offset-2 ring-offset-ink-950;
+  }
+
+  ::selection {
+    @apply bg-accent/25 text-white;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-md px-4 py-2
+           text-sm font-medium transition-colors duration-150
+           disabled:cursor-not-allowed disabled:opacity-40;
+  }
+
+  .btn-primary {
+    @apply btn bg-accent text-ink-950 hover:bg-accent-soft;
+  }
+
+  .btn-secondary {
+    @apply btn border border-ink-700 bg-ink-900 text-ink-100 hover:border-ink-600 hover:bg-ink-850;
+  }
+
+  .btn-ghost {
+    @apply btn text-ink-300 hover:bg-ink-850 hover:text-ink-100;
+  }
+
+  .field {
+    @apply w-full rounded-md border border-ink-700 bg-ink-900 px-3 py-2 text-sm
+           text-ink-100 transition-colors placeholder:text-ink-500
+           focus:border-accent/60 focus:outline-none;
+  }
+
+  .panel {
+    @apply rounded-lg border border-ink-800 bg-ink-900;
+  }
+
+  .label {
+    @apply text-xs font-medium uppercase tracking-wider text-ink-400;
+  }
+}
+
+/* Thin scrollbars keep long lists from feeling heavy. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #2A2A30 transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: #2A2A30;
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}

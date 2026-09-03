@@ -1,0 +1,35 @@
+# --- Web / API ---------------------------------------------------------------
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+pydantic==2.10.4
+pydantic-settings==2.7.1
+
+# --- Persistence -------------------------------------------------------------
+SQLAlchemy==2.0.36
+
+# --- HTTP (Ollama client) ----------------------------------------------------
+httpx==0.28.1
+
+# --- Numerics / signal processing -------------------------------------------
+# librosa is deliberately avoided: it pulls numba, which lags on new Python
+# releases. Audio features are computed directly with numpy/scipy/soundfile.
+numpy==2.2.1
+scipy==1.15.0
+soundfile==0.13.0
+scikit-learn==1.6.1
+
+# --- Vision / video analysis -------------------------------------------------
+opencv-python-headless==4.11.0.86
+scenedetect==0.6.5.2
+
+# --- Speech recognition (CPU, no torch required) ----------------------------
+faster-whisper==1.1.1
+# faster-whisper imports requests directly; huggingface-hub 1.x no longer pulls it in.
+requests==2.32.3
+
+# --- FFmpeg fallback if no system/bundled binary is found -------------------
+imageio-ffmpeg==0.5.1
+
+# --- Tests -------------------------------------------------------------------
+pytest==8.3.4
