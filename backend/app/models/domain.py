@@ -288,6 +288,11 @@ class Candidate(BaseModel):
     breakdown: ScoreBreakdown = Field(default_factory=ScoreBreakdown)
     heuristic_score: float = 0.0
     trigger: str = "generic"
+    # Attention signals: how hard the first seconds hit, and how much conflict
+    # the window carries. Both drive selection for short-form.
+    opening_punch: float = 0.0
+    conflict_intensity: float = 0.0
+    conflict_note: str = ""
     vision: Optional[VisionObservation] = None
 
     @property

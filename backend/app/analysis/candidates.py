@@ -26,6 +26,7 @@ from ..models.domain import (
     VisualAnalysis,
 )
 from . import audio_analysis as aa
+from . import conflict
 from . import scenes as scene_utils
 from . import visual as visual_utils
 from .boundaries import refine_boundaries, text_starts_dependently
@@ -70,6 +71,20 @@ _TRIGGER_PATTERNS: dict[str, re.Pattern[str]] = {
         r"that is the whole|the answer is)\b",
         re.I,
     ),
+    "confrontation": re.compile(
+        r"(don't touch|do not touch|get out|back off|shut up|let go|"
+        r"give it back|you're lying|youre lying|that's a lie|thats a lie|"
+        r"excuse me|hey hey|whoa|stop it|get off|get away from|"
+        r"who do you think|how dare you|are you serious|"
+        r"call the police|i'm calling|im calling)",
+        re.I,
+    ),
+    "challenge": re.compile(
+        r"(answer the question|why won't you|why wont you|prove it|"
+        r"do you support|do you think|what about|explain to me|"
+        r"can you name|justify)",
+        re.I,
+    ),
     "number": re.compile(
         r"\b\d{1,3}(?:[.,]\d+)?\s?(?:percent|%|x|times|million|billion|"
         r"thousand|dollars|years|months|weeks|days)\b",
@@ -89,7 +104,11 @@ _LOW_VALUE = re.compile(
     r"swap the microphone|sorry to interrupt|sponsored by|subscribe|"
     r"episodes recorded|go out in january|we record every|"
     r"back after the break|let us pause|microphone battery|"
-    r"the boring logistics|flew in this morning|the flight was delayed)\b",
+    r"the boring logistics|flew in this morning|the flight was delayed|"
+    # Greetings and channel intros: a reel that opens on one is dead.
+    r"welcome to the|welcome everybody|thanks for watching|"
+    r"like and subscribe|hit the bell|in this video|today we are here|"
+    r"my name is [a-z]+ and)\b",
     re.I,
 )
 
@@ -120,8 +139,17 @@ def trim_filler_opening(
     overlapping = [s for s in sentences if s.end > start + 0.2 and s.start < end]
 
     trimmed = False
-    for sentence in overlapping:
+    for position, sentence in enumerate(overlapping):
         if not _LOW_VALUE.search(sentence.text):
+            # A tiny pleasantry ("Thank you.") often sits in front of the real
+            # filler; look one sentence past it rather than giving up.
+            following = overlapping[position + 1] if position + 1 < len(overlapping) else None
+            if (
+                len(sentence.text.split()) <= 3
+                and following is not None
+                and _LOW_VALUE.search(following.text)
+            ):
+                continue
             break
 
         new_start = sentence.end
@@ -222,6 +250,8 @@ def _anchor_score(sentence: _Sentence, following: str) -> tuple[float, str]:
     for name, pattern in _TRIGGER_PATTERNS.items():
         if pattern.search(text):
             weight = {
+                "confrontation": 0.95,
+                "challenge": 0.8,
                 "story": 0.9,
                 "lesson": 0.85,
                 "disagreement": 0.8,
@@ -305,6 +335,8 @@ def _score_window(
 
     # --- narrative structure -----------------------------------------------
     structure = {
+        "confrontation": 0.85,
+        "challenge": 0.8,
         "story": 0.9,
         "lesson": 0.85,
         "question": 0.8,
@@ -374,6 +406,9 @@ def generate_candidates(
     scene_list: list[Scene],
     weights: dict[str, float],
     min_duration: float,
+    opening_window: float = 3.0,
+    opening_weight: float = 0.22,
+    conflict_weight: float = 0.18,
     max_duration: float,
     total_duration: float,
     pool_max: int = 80,
@@ -458,9 +493,36 @@ def generate_candidates(
                 speakers=window_speakers,
             )
 
-            score = breakdown.weighted_total(weights)
+            # Conflict intensity and opening punch, from cheap signals.
+            profile = conflict.profile_window(
+                transcript=transcript,
+                audio=audio,
+                diarization=diarization,
+                start=refined.start,
+                end=refined.end,
+                opening_window=opening_window,
+            )
+
+            # A clip nobody watches past three seconds has no other quality, so
+            # the opening is weighted directly rather than averaged away.
+            breakdown.opening_strength = round(
+                min(1.0, 0.45 * breakdown.opening_strength + 0.55 * profile.opening_punch),
+                4,
+            )
+            breakdown.emotional_reaction = round(
+                min(1.0, max(breakdown.emotional_reaction, profile.intensity)), 4
+            )
+
+            base = breakdown.weighted_total(weights)
             # Blend in the anchor: a strong structural cue is real evidence.
-            score = 0.82 * score + 0.18 * float(np.clip(anchor, 0.0, 1.0))
+            base = 0.82 * base + 0.18 * float(np.clip(anchor, 0.0, 1.0))
+
+            residual = max(0.0, 1.0 - opening_weight - conflict_weight)
+            score = (
+                residual * base
+                + opening_weight * profile.opening_punch
+                + conflict_weight * profile.intensity
+            )
 
             anchors.append(i)
             candidates.append(
@@ -489,6 +551,9 @@ def generate_candidates(
                     breakdown=breakdown,
                     heuristic_score=round(float(score), 4),
                     trigger=trigger,
+                    opening_punch=profile.opening_punch,
+                    conflict_intensity=profile.intensity,
+                    conflict_note=profile.summary,
                 )
             )
 

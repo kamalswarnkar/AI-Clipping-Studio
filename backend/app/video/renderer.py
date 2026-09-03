@@ -82,7 +82,13 @@ def _build_video_filter(
     subtitle_file: Optional[Path],
 ) -> tuple[str, str, int]:
     """Assemble the video filter chain. Returns (filter, strategy, keyframes)."""
-    parts: list[str] = []
+    # Rebase timestamps to zero FIRST.
+    #
+    # We fast-seek with -ss before -i and trim with -ss after it. That trim
+    # drops frames but does NOT rezero the PTS the filter graph sees, so frames
+    # arrive with PTS ~= the pre-roll length. The subtitles filter renders by
+    # PTS, so without this every caption appears the pre-roll duration early.
+    parts: list[str] = ["setpts=PTS-STARTPTS"]
     strategy = "no reframing"
     keyframe_count = 0
 
@@ -190,21 +196,27 @@ def render_clip(
     # --- audio --------------------------------------------------------------
     # loudnorm brings every clip to a consistent level; without it, clips cut
     # from different parts of a recording vary noticeably in volume.
+    # asetpts mirrors the video rebase so the two streams stay aligned.
     audio_filter = (
+        "asetpts=PTS-STARTPTS,"
         f"loudnorm=I={options.target_lufs}:TP=-1.5:LRA=11,"
         "aresample=async=1:first_pts=0"
     )
 
     args = [
         "-y",
-        # Seek before -i for a fast keyframe seek, then trim precisely with -ss
-        # after: accurate cuts without decoding from the start of the file.
+        # A single accurate seek before -i.
+        #
+        # Do NOT reintroduce the "fast pre-roll seek + output -ss trim" pattern
+        # here. Input -ss already rebases timestamps to zero, so the filter graph
+        # burns subtitles from that zero point and the output-side -ss then
+        # discards the first seconds of ALREADY-SUBTITLED video, shifting every
+        # caption earlier by the pre-roll length. Modern ffmpeg decodes to the
+        # exact frame on input seek, so the pre-roll bought nothing anyway.
         "-ss",
-        f"{max(0.0, plan.start - 5.0):.3f}",
+        f"{plan.start:.3f}",
         "-i",
         str(source),
-        "-ss",
-        f"{min(5.0, plan.start):.3f}",
         "-t",
         f"{duration:.3f}",
         "-vf",

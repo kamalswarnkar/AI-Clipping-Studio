@@ -39,7 +39,7 @@ validated and clamped, and a deterministic renderer performs every cut.
 | `ANALYZE_AUDIO` | loudness, silence, emphasis, laughter/applause | cheap |
 | `ANALYZE_VISUALS` | OpenCV faces, motion, exposure across every sampled frame | cheap |
 | `GENERATE_CANDIDATES` | 30–100 windows, multi-factor scored | cheap |
-| `LLM_EVALUATE` | vision montages on the top candidates, then LLM judgement | **expensive** |
+| `LLM_EVALUATE` | LLM judgement, batched and run concurrently | **expensive** |
 | `VALIDATE` | context check, filler trim, dedupe, word-boundary snap | moderate |
 | `GENERATE_COPY` | 13 hooks + caption, fact-checked against the transcript | moderate |
 | `RENDER` | trim → smart 9:16 crop → loudnorm → burn captions → H.264 | moderate |
@@ -113,10 +113,13 @@ The settings you are most likely to change:
 | Variable | Default | Notes |
 |---|---|---|
 | `OLLAMA_LLM_MODEL` | `qwen2.5:7b-instruct` | Any instruct model with good JSON adherence |
-| `OLLAMA_VISION_MODEL` | `qwen2.5vl:7b` | Set `VISION_ENABLED=false` to skip vision entirely |
-| `WHISPER_MODEL` | `small` | `base` is ~3× faster, `medium` more accurate |
-| `VISION_MAX_CANDIDATES` | `20` | The main speed/quality lever — vision dominates runtime |
-| `RENDER_WORKERS` | `2` | Parallel clip renders |
+| `OLLAMA_VISION_MODEL` | `qwen2.5vl:7b` | Only used when `VISION_ENABLED=true` |
+| `VISION_ENABLED` | `false` | Vision costs ~25s per candidate. Conflict is detected far more cheaply from audio + speaker turns |
+| `WHISPER_MODEL` | `base` | ~2.8× faster than `small` with near-identical output. Use `small`/`medium` for noisy audio or proper nouns |
+| `LLM_PARALLEL` | `3` | Concurrent Ollama requests |
+| `OPENING_WEIGHT` | `0.22` | How much the first 3 seconds count toward selection |
+| `CONFLICT_WEIGHT` | `0.18` | Weight for shouting / interruption / confrontation |
+| `RENDER_WORKERS` | `3` | Parallel clip renders |
 | `CLIP_MIN_DURATION` / `CLIP_MAX_DURATION` | `10` / `60` | Also settable per project in the UI |
 
 Scoring weights live in `backend/config/scoring.json` and can be tuned without
@@ -165,6 +168,9 @@ rather than left to the model:
   A hook citing a number or quote that was never said is rejected and replaced.
 - **Fewer clips is a valid answer.** If only 6 moments are strong, you get 6 and
   a message saying so. The app never pads the list to hit a requested count.
+- **Openings are protected.** A clip may not start mid-sentence or on a greeting,
+  logistics or channel intro, because the first three seconds decide whether a
+  short-form clip is watched at all.
 
 For political or contested material the system transcribes, clips and describes
 faithfully. It does not do voter targeting, demographic persuasion, or
@@ -174,22 +180,29 @@ optimisation of political messaging.
 
 ## Performance
 
-Measured on a Ryzen-class desktop with an RX 6650 XT (8 GB, ROCm):
+Measured on an i5-14400F with an RX 6650 XT (8 GB, ROCm), on a **16.9-minute**
+source producing **11 clips**:
 
-| Stage | Throughput |
+| Stage | Time |
 |---|---|
-| Transcription (`small`, CPU int8) | ~5–7× realtime |
-| Scene + audio + visual analysis | ~15× realtime |
-| Vision reasoning | ~25 s per candidate |
-| LLM evaluation | ~5 s per candidate |
-| Rendering | ~6× realtime per clip, 2 in parallel |
+| Ingest + proxy | 23 s |
+| Transcription (`base`, CPU int8) | 50 s |
+| Diarization + scenes + audio + visual | 36 s |
+| Candidate generation | 7 s |
+| LLM evaluation (32 candidates) | 115 s |
+| Context validation (11 clips) | 31 s |
+| Copy generation (11 clips × 13 hooks + caption) | 197 s |
+| Rendering (11 clips) | 97 s |
+| **Total** | **≈ 9.2 min** |
 
-Vision dominates. Lower `VISION_MAX_CANDIDATES`, or set `VISION_ENABLED=false`,
-to trade some selection quality for a large speed-up.
+Copy generation is now the largest stage and scales linearly with clip count:
+each clip needs 13 hooks plus a full caption, and generation tokens are the
+bottleneck. Ask for fewer clips if you want it faster.
 
-The text model (4.7 GB) and vision model (6 GB) do not fit in 8 GB of VRAM
-together, so the pipeline deliberately runs all vision calls in one batch before
-any text calls, avoiding repeated model swaps.
+If you enable `VISION_ENABLED=true`, expect roughly +25 s per analysed
+candidate. The text model (4.7 GB) and vision model (6 GB) do not both fit in
+8 GB of VRAM, so the pipeline runs all vision calls in one batch before any text
+calls, avoiding repeated model swaps.
 
 ---
 

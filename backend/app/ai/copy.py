@@ -1,15 +1,15 @@
 """Hook and caption generation, with factuality checks applied in code.
 
 The prompt asks the model not to fabricate. This module verifies it, because a
-prompt is a request and not a guarantee. Every generated hook is checked against
-the clip transcript for:
+prompt is a request and not a guarantee. Every generated hook is checked for:
 
 * numbers and percentages that were never said
 * quoted phrases that do not appear in the speech
-* fabricated attribution
+* banned generic phrases that would fit any video
 
-Anything that fails is dropped and replaced from the transcript itself, so the
-output stays faithful even when the model does not (Architecture.md section 19).
+Hooks and the caption are produced in a SINGLE call: they share all their
+context, and two calls per clip doubled prompt prefill and request overhead
+for no quality benefit. Generation tokens dominate this stage's runtime.
 """
 
 from __future__ import annotations
@@ -37,6 +37,9 @@ _QUOTED = re.compile(
     r"|(?<![\w’])‘([^’]{8,})’(?![\w])"
 )
 _WORD = re.compile(r"[a-z0-9']+")
+_EMOJI = re.compile(
+    "[\U0001F300-\U0001FAFF\U00002600-\U000027BF\U0001F1E6-\U0001F1FF]"
+)
 
 # Spelled-out forms so "ninety one percent" matches "91%".
 _NUMBER_WORDS = {
@@ -50,6 +53,8 @@ _NUMBER_WORDS = {
     "million": "1000000", "billion": "1000000000",
 }
 
+DEFAULT_EMOJIS = ("🚨", "👀", "😳", "😶")
+
 
 def _normalise(text: str) -> str:
     return " ".join(_WORD.findall(text.lower()))
@@ -62,7 +67,6 @@ def _transcript_numbers(transcript: str) -> set[str]:
     for word, digits in _NUMBER_WORDS.items():
         if re.search(rf"\b{word}\b", lowered):
             found.add(digits)
-    # "ninety one" -> 91
     for first, second in re.findall(
         r"\b(twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)[\s-]"
         r"(one|two|three|four|five|six|seven|eight|nine)\b",
@@ -84,7 +88,6 @@ def check_factuality(text: str, transcript: str) -> tuple[bool, str]:
 
     transcript_numbers = _transcript_numbers(transcript)
     for number in _NUMBER.findall(text):
-        # Ignore small ordinals that are usually rhetorical ("3 things").
         if number in transcript_numbers:
             continue
         if number.rstrip(".0") in {n.rstrip(".0") for n in transcript_numbers}:
@@ -101,6 +104,50 @@ def check_factuality(text: str, transcript: str) -> tuple[bool, str]:
     return True, ""
 
 
+def check_hook_quality(text: str) -> tuple[bool, str]:
+    """Reject hooks that are generic, banned, or the wrong shape.
+
+    The brief is explicit that a hook which could fit hundreds of videos is a
+    failure, so that is enforced here rather than hoped for.
+    """
+    stripped = _EMOJI.sub("", text).strip()
+    if not stripped:
+        return False, "empty"
+
+    lowered = stripped.lower()
+    for phrase in P.BANNED_HOOK_PHRASES:
+        if phrase in lowered:
+            return False, f"uses banned phrase '{phrase}'"
+
+    words = len(stripped.split())
+    if words > 14:
+        return False, f"{words} words, too long to read at a glance"
+
+    return True, ""
+
+
+def _clean_hook(text: str) -> str:
+    """Tidy the artifacts a small model leaves on hook text.
+
+    Typical output includes stray leading punctuation ("/Area Tensions Erupt"),
+    trailing hashtags that belong in the caption, and wrapping quotes.
+    """
+    text = text.strip().strip('"').strip()
+    # Hashtags belong in the caption, not in a hook.
+    text = re.sub(r"\s*#\w+", "", text)
+    # Leading punctuation left over from a truncated or malformed generation.
+    text = re.sub(r"^[\s\-–—:;,./\\|*>]+", "", text)
+    # Collapse whitespace introduced by the removals.
+    return re.sub(r"\s{2,}", " ", text).strip()
+
+
+def _ensure_emoji(text: str) -> str:
+    """Guarantee the hook carries an emoji, as the brief requires."""
+    if _EMOJI.search(text):
+        return text
+    return f"🚨 {text.strip()}"
+
+
 def _fallback_hooks(plan: ClipPlan, existing: list[Hook]) -> list[Hook]:
     """Fill missing categories with transcript-derived lines.
 
@@ -110,7 +157,7 @@ def _fallback_hooks(plan: ClipPlan, existing: list[Hook]) -> list[Hook]:
     sentences = [
         s.strip()
         for s in re.split(r"(?<=[.!?])\s+", plan.transcript)
-        if 4 <= len(s.split()) <= 18
+        if 4 <= len(s.split()) <= 14
     ]
     sentences.sort(key=lambda s: -len(s.split()))
 
@@ -123,83 +170,48 @@ def _fallback_hooks(plan: ClipPlan, existing: list[Hook]) -> list[Hook]:
             continue
         sentence = next(pool, "")
         if not sentence:
-            sentence = (plan.topic or plan.transcript[:70]).strip()
+            sentence = (plan.topic or plan.transcript[:60]).strip()
         text = sentence.rstrip(".").strip()
         if len(text) > 90:
             text = text[:87].rsplit(" ", 1)[0] + "..."
-        filled.append(Hook(category=category, text=text))
+        filled.append(Hook(category=category, text=_ensure_emoji(text)))
 
     return filled
 
 
-def generate_copy(
-    plan: ClipPlan,
-    *,
-    llm: LLMProvider,
-    vision: Optional[VisionObservation] = None,
-) -> ClipCopy:
-    """Generate 13 ranked hooks and one caption for a clip.
-
-    Falls back to transcript-derived copy if the model is unavailable, so a clip
-    always ships with usable text rather than an empty file.
-    """
-    visual_note = ""
-    if vision and vision.description:
-        visual_note = vision.description[:200]
-
-    prompt = P.build_copy_prompt(
-        transcript=plan.transcript,
-        topic=plan.topic,
-        speakers=plan.speakers,
-        duration=plan.duration,
-        visual_note=visual_note,
-    )
-
-    raw: dict = {}
-    try:
-        raw = llm.complete_json(
-            system=P.COPY_SYSTEM,
-            prompt=prompt,
-            schema=P.COPY_SCHEMA,
-            temperature=0.7,  # copy benefits from variety; evaluation does not
-            max_tokens=1100,
-        )
-    except ProviderError as exc:
-        log.warning("Copy generation failed for %s: %s", plan.name, exc)
-
-    # --- hooks --------------------------------------------------------------
+def _parse_hooks(raw: dict, plan: ClipPlan) -> tuple[list[Hook], str]:
+    """Turn a raw response into ranked hooks. Returns (hooks, best hook text)."""
     accepted: list[Hook] = []
-    rejected: list[tuple[str, str]] = []
-    seen_texts: set[str] = set()
+    seen: set[str] = set()
 
     for item in raw.get("hooks", []) or []:
         if not isinstance(item, dict):
             continue
-        text = str(item.get("text", "")).strip().strip('"')
+        text = _clean_hook(str(item.get("text", "")))
         category = str(item.get("category", "")).strip()
-
-        if category not in P.HOOK_CATEGORIES:
-            # Map onto the closest known category by position, or drop it.
-            category = next(
-                (c for c in P.HOOK_CATEGORIES if c.lower() == category.lower()), ""
-            )
+        category = next(
+            (c for c in P.HOOK_CATEGORIES if c.lower() == category.lower()), ""
+        )
         if not text or not category:
             continue
 
         key = _normalise(text)
-        if key in seen_texts:
+        if key in seen:
             continue
 
         ok, why = check_factuality(text, plan.transcript)
         if not ok:
-            rejected.append((text, why))
             log.info("Rejected hook for %s (%s): %s", plan.name, why, text[:60])
             continue
 
-        seen_texts.add(key)
-        accepted.append(Hook(category=category, text=text))
+        ok, why = check_hook_quality(text)
+        if not ok:
+            log.info("Rejected hook for %s (%s): %s", plan.name, why, text[:60])
+            continue
 
-    # Keep one hook per category, in the canonical order.
+        seen.add(key)
+        accepted.append(Hook(category=category, text=_ensure_emoji(text)))
+
     by_category: dict[str, Hook] = {}
     for hook in accepted:
         by_category.setdefault(hook.category, hook)
@@ -208,8 +220,8 @@ def generate_copy(
     hooks.sort(key=lambda h: P.HOOK_CATEGORIES.index(h.category))
 
     # --- ranking ------------------------------------------------------------
-    ranking = raw.get("ranking")
     ordered: list[Hook] = []
+    ranking = raw.get("ranking")
     if isinstance(ranking, list):
         for position in ranking:
             try:
@@ -221,7 +233,6 @@ def generate_copy(
     for hook in hooks:
         if hook not in ordered:
             ordered.append(hook)
-
     for rank, hook in enumerate(ordered, start=1):
         hook.rank = rank
 
@@ -231,34 +242,137 @@ def generate_copy(
         index = int(raw.get("best_hook_index", -1))
         if 0 <= index < len(hooks):
             candidate = hooks[index]
-            ok, _ = check_factuality(candidate.text, plan.transcript)
-            if ok:
+            if check_factuality(candidate.text, plan.transcript)[0]:
                 best = candidate
     except (TypeError, ValueError):
         pass
 
-    if best is not None:
-        for hook in hooks:
-            hook.is_best = hook is best
+    for hook in hooks:
+        hook.is_best = hook is best
 
-    # --- caption ------------------------------------------------------------
-    caption = str(raw.get("caption", "")).strip()
+    return hooks, (best.text if best else "")
+
+
+def _format_caption(raw: dict, plan: ClipPlan) -> str:
+    """Assemble the caption in the required layout.
+
+    The structure is built in code rather than asked for as free text, so the
+    headline banner, the side-taking question, the location rule and the exact
+    hashtag count are guaranteed instead of hoped for.
+    """
+    headline = str(raw.get("headline", "")).strip().strip('"').rstrip("!.")
+    if not headline:
+        headline = (plan.topic or "CONFRONTATION CAUGHT ON CAMERA").upper()
+    headline = _EMOJI.sub("", headline).strip().upper()
+
+    parts: list[str] = [f"🚨 {headline} 🚨", ""]
+
+    for key in ("trigger", "escalation", "debate"):
+        paragraph = str(raw.get(key, "")).strip()
+        if paragraph:
+            parts.extend([paragraph, ""])
+
+    question = str(raw.get("question", "")).strip()
+    if question:
+        question = question.lstrip("👇").strip()
+        # The model often ends on an emoji. Check for the question mark against
+        # the text with any trailing emoji removed, or we produce "...🤔?".
+        without_emoji = _EMOJI.sub("", question).strip()
+        if without_emoji and not without_emoji.endswith("?"):
+            question = f"{without_emoji}?"
+        else:
+            question = without_emoji or question
+        parts.extend([f"👇 {question}", ""])
+
+    # Only include a location the model was given evidence for.
+    location = str(raw.get("location", "")).strip()
+    if location and location.lower() not in ("unknown", "n/a", "none", "null"):
+        parts.extend([f"📍 Geotag / Location: {location}", ""])
+
+    tags = raw.get("hashtags") or []
+    cleaned: list[str] = []
+    for tag in tags:
+        tag = str(tag).strip().replace(" ", "")
+        if not tag:
+            continue
+        if not tag.startswith("#"):
+            tag = f"#{tag}"
+        if tag.lower() not in {t.lower() for t in cleaned}:
+            cleaned.append(tag)
+    while len(cleaned) < 5:
+        for filler in ("#StreetInterview", "#PublicConfrontation", "#ViralVideo",
+                       "#Debate", "#CaughtOnCamera"):
+            if filler.lower() not in {t.lower() for t in cleaned}:
+                cleaned.append(filler)
+                break
+    parts.append(" ".join(cleaned[:5]))
+
+    return "\n".join(parts).strip()
+
+
+def _build_caption(raw: dict, plan: ClipPlan) -> str:
+    caption = _format_caption(raw, plan)
+
     ok, why = check_factuality(caption, plan.transcript)
     if not ok:
-        if caption:
-            log.info("Rejected caption for %s (%s)", plan.name, why)
-        topic = plan.topic or "this moment"
-        speakers = " and ".join(plan.speakers) if plan.speakers else "the speaker"
-        first = re.split(r"(?<=[.!?])\s+", plan.transcript.strip())[:2]
-        caption = (
-            f"{speakers} on {topic}. " + " ".join(first)
-        ).strip()
-        if len(caption) > 400:
-            caption = caption[:397].rsplit(" ", 1)[0] + "..."
+        log.info("Caption for %s failed the factuality check (%s)", plan.name, why)
+        # Rebuild without the offending free text, keeping the structure.
+        safe = {
+            "headline": (plan.topic or "confrontation caught on camera").upper(),
+            "trigger": " ".join(
+                re.split(r"(?<=[.!?])\s+", plan.transcript.strip())[:2]
+            )[:400],
+            "escalation": "",
+            "debate": "",
+            "question": "Who crossed the line",
+            "location": "",
+            "hashtags": raw.get("hashtags") or [],
+        }
+        caption = _format_caption(safe, plan)
+
+    return caption
+
+
+def generate_copy(
+    plan: ClipPlan,
+    *,
+    llm: LLMProvider,
+    vision: Optional[VisionObservation] = None,
+    conflict_note: str = "",
+    opening_line: str = "",
+) -> ClipCopy:
+    """Generate 13 ranked hooks and one formatted caption for a clip."""
+    visual_note = vision.description[:200] if vision and vision.description else ""
+    opening = opening_line or " ".join(plan.transcript.split()[:14])
+
+    # One call for both. Hooks and the caption share every piece of context, so
+    # splitting them doubled prompt prefill and request overhead for no benefit.
+    raw: dict = {}
+    try:
+        raw = llm.complete_json(
+            system=P.COPY_SYSTEM,
+            prompt=P.build_copy_prompt(
+                transcript=plan.transcript,
+                opening_line=opening,
+                topic=plan.topic,
+                speakers=plan.speakers,
+                duration=plan.duration,
+                conflict_note=conflict_note,
+                visual_note=visual_note,
+            ),
+            schema=P.COPY_SCHEMA,
+            temperature=0.75,
+            max_tokens=1100,
+        )
+    except ProviderError as exc:
+        log.warning("Copy generation failed for %s: %s", plan.name, exc)
+
+    hooks, best = _parse_hooks(raw, plan)
+    caption = _build_caption(raw, plan)
 
     return ClipCopy(
         hooks=hooks,
-        best_hook=best.text if best else "",
+        best_hook=best,
         caption=caption,
         generated_by=getattr(llm, "model", getattr(llm, "name", "unknown")),
     )

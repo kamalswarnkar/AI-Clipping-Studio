@@ -417,3 +417,127 @@ def test_cues_break_on_speaker_change(transcript: Transcript) -> None:
     # The turn changes at 2.0s, so no cue may straddle it.
     for start, end, _ in cues:
         assert not (start < 2.0 - 1e-6 and end > 2.0 + 1e-6)
+
+
+# ---------------------------------------------------------------------------
+# Truncated model output
+# ---------------------------------------------------------------------------
+
+def test_salvages_truncated_json_response() -> None:
+    """A response cut off mid-object must not lose the items that completed."""
+    from app.ai.llm.ollama_provider import _extract_json
+
+    truncated = (
+        '{"evaluations": ['
+        '{"candidate_id": "c1", "quality_score": 0.9},'
+        '{"candidate_id": "c2", "quality_score": 0.4},'
+        '{"candidate_id": "c3", "quality_sc'
+    )
+    result = _extract_json(truncated)
+    assert [e["candidate_id"] for e in result["evaluations"]] == ["c1", "c2"]
+
+
+def test_extract_json_ignores_braces_inside_strings() -> None:
+    from app.ai.llm.ollama_provider import _extract_json
+
+    result = _extract_json('{"a": "a } brace", "b": [{"c": 1}, {"d": 2')
+    assert result["a"] == "a } brace"
+    assert result["b"] == [{"c": 1}]
+
+
+def test_extract_json_still_parses_clean_output() -> None:
+    from app.ai.llm.ollama_provider import _extract_json
+
+    assert _extract_json('{"x": [1, 2, 3]}') == {"x": [1, 2, 3]}
+    fenced = "```json\n" + '{"y": 5}' + "\n```"
+    assert _extract_json(fenced) == {"y": 5}
+
+
+# ---------------------------------------------------------------------------
+# Opening quality (short-form retention)
+# ---------------------------------------------------------------------------
+
+def _continuation_transcript() -> Transcript:
+    """Two ASR segments that split a single sentence in half.
+
+    Whisper does this constantly on noisy audio, and it used to make the second
+    segment look like a sentence start.
+    """
+    seg_a = TranscriptSegment(
+        id=0, start=0.0, end=2.0, text="They are not going to be",
+        words=_words([("They", 0.0, 0.3), ("are", 0.3, 0.6), ("not", 0.6, 0.9),
+                      ("going", 0.9, 1.3), ("to", 1.3, 1.5), ("be", 1.5, 2.0)]),
+    )
+    # Starts 0.1s later -- a continuation, not a new sentence.
+    seg_b = TranscriptSegment(
+        id=1, start=2.1, end=4.0, text="paying taxes at all?",
+        words=_words([("paying", 2.1, 2.5), ("taxes", 2.5, 2.9),
+                      ("at", 2.9, 3.1), ("all?", 3.1, 4.0)]),
+    )
+    seg_c = TranscriptSegment(
+        id=2, start=5.0, end=8.0, text="We should fix the fraud first.",
+        words=_words([("We", 5.0, 5.2), ("should", 5.2, 5.5), ("fix", 5.5, 5.8),
+                      ("the", 5.8, 6.0), ("fraud", 6.0, 6.5), ("first.", 6.5, 8.0)]),
+    )
+    return Transcript(duration=20.0, segments=[seg_a, seg_b, seg_c])
+
+
+def test_segment_break_is_not_a_sentence_start() -> None:
+    """A mid-sentence ASR split must not be offered as a clip opening."""
+    starts = sentence_starts(_continuation_transcript())
+    assert 0.0 in starts          # genuine start
+    assert 2.1 not in starts      # mid-sentence continuation
+    assert 5.0 in starts          # follows a completed sentence
+
+
+def test_floor_start_prevents_resnapping_onto_trimmed_filler() -> None:
+    """Snapping must not restore an opening the caller deliberately removed."""
+    tr = _continuation_transcript()
+    refined = refine_boundaries(
+        5.0, 18.0, transcript=tr, min_duration=5.0, max_duration=60.0,
+        total_duration=20.0, floor_start=5.0,
+    )
+    assert refined.start >= 5.0 - 0.2
+
+
+def test_opening_punch_prefers_confrontation() -> None:
+    """A confrontational opening must outscore a calm one."""
+    from app.analysis.conflict import opening_punch_score
+
+    calm = TranscriptSegment(
+        id=0, start=0.0, end=3.0, text="So the weather was quite nice that day.",
+        words=_words([("So", 0.0, 0.3), ("the", 0.3, 0.5), ("weather", 0.5, 1.0),
+                      ("was", 1.0, 1.3), ("quite", 1.3, 1.7), ("nice", 1.7, 2.2),
+                      ("that", 2.2, 2.6), ("day.", 2.6, 3.0)]),
+    )
+    hot = TranscriptSegment(
+        id=0, start=0.0, end=3.0, text="Don't touch my things! You're lying.",
+        words=_words([("Don't", 0.0, 0.3), ("touch", 0.3, 0.6), ("my", 0.6, 0.8),
+                      ("things!", 0.8, 1.4), ("You're", 1.4, 1.8),
+                      ("lying.", 1.8, 3.0)]),
+    )
+    calm_score = opening_punch_score(
+        transcript=Transcript(duration=10.0, segments=[calm]),
+        audio=None, diarization=None, start=0.0,
+    )
+    hot_score = opening_punch_score(
+        transcript=Transcript(duration=10.0, segments=[hot]),
+        audio=None, diarization=None, start=0.0,
+    )
+    assert hot_score > calm_score
+
+
+def test_hook_quality_rejects_banned_phrases() -> None:
+    from app.ai.copy import check_hook_quality
+
+    assert not check_hook_quality("You won't believe what happened")[0]
+    assert not check_hook_quality("Things got heated at the rally")[0]
+    assert check_hook_quality("🚨 He grabbed the papers and walked away")[0]
+
+
+def test_clean_hook_strips_model_artifacts() -> None:
+    from app.ai.copy import _clean_hook
+
+    assert _clean_hook("/Area Tensions Erupt") == "Area Tensions Erupt"
+    assert _clean_hook('Why defend it? #FreeSpeech #Debate') == "Why defend it?"
+    assert _clean_hook('  "He walked away"  ') == "He walked away"

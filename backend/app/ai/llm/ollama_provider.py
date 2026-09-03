@@ -29,6 +29,77 @@ log = logging.getLogger(__name__)
 _FENCE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
 
 
+def _salvage_truncated_json(text: str) -> Any:
+    """Recover as much as possible from a response that was cut off.
+
+    A long batch response can hit the token limit mid-object. Discarding the
+    whole thing throws away the evaluations that *did* complete and forces a
+    retry, so instead we close the open brackets -- dropping the final partial
+    element -- and parse what survived.
+    """
+    start = text.find("{")
+    if start == -1:
+        start = text.find("[")
+    if start == -1:
+        raise ValueError("no JSON structure present")
+
+    stack: list[str] = []
+    in_string = False
+    escaped = False
+    # Offset just past the last element that closed cleanly at depth 2 or less.
+    last_safe = -1
+
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch in "{[":
+            stack.append("}" if ch == "{" else "]")
+        elif ch in "}]":
+            if stack:
+                stack.pop()
+            # Any close that leaves us still inside the outer structure marks a
+            # complete element. Later ones overwrite earlier ones, so this ends
+            # up pointing at the last item that survived the truncation.
+            if stack:
+                last_safe = i
+    if last_safe == -1:
+        raise ValueError("nothing complete to salvage")
+
+    # Rebuild: everything through the last cleanly-closed element, then close
+    # whatever is still open.
+    partial = text[start : last_safe + 1]
+    depth_stack: list[str] = []
+    in_string = False
+    escaped = False
+    for ch in partial:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch in "{[":
+            depth_stack.append("}" if ch == "{" else "]")
+        elif ch in "}]" and depth_stack:
+            depth_stack.pop()
+
+    repaired = partial + "".join(reversed(depth_stack))
+    return json.loads(repaired)
+
+
 def _extract_json(text: str) -> Any:
     text = (text or "").strip()
     if not text:
@@ -55,7 +126,20 @@ def _extract_json(text: str) -> Any:
             except ValueError:
                 continue
 
-    raise ValueError(f"no JSON found in response: {text[:200]}")
+    # Last resort: the response was probably truncated mid-object.
+    try:
+        salvaged = _salvage_truncated_json(text)
+        log.warning(
+            "Recovered a truncated JSON response (%d chars); some items were lost.",
+            len(text),
+        )
+        return salvaged
+    except ValueError:
+        pass
+
+    raise ValueError(
+        f"no JSON found in {len(text)}-char response starting: {text[:160]!r}"
+    )
 
 
 class _OllamaBase:

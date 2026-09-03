@@ -16,6 +16,14 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "backend"))
 
+# Hooks and captions contain emoji. The Windows console defaults to cp1252 and
+# raises UnicodeEncodeError on them, which would kill the run at the report step.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 from app.exporters.files import build_export_tree, zip_directory  # noqa: E402
 from app.jobs.pipeline import create_jobs, run_pipeline  # noqa: E402
 from app.jobs.states import ProjectStatus  # noqa: E402

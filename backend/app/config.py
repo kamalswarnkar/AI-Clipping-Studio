@@ -80,10 +80,11 @@ class Settings(BaseSettings):
     ollama_json_retries: int = 3
 
     # --- Whisper ------------------------------------------------------------
-    whisper_model: str = "small"
+    whisper_model: str = "base"
     whisper_device: str = "auto"
     whisper_compute_type: str = "int8"
-    whisper_beam_size: int = 5
+    whisper_beam_size: int = 1
+    whisper_cpu_threads: int = 0
     whisper_language: str = ""
     whisper_vad_filter: bool = True
 
@@ -92,11 +93,13 @@ class Settings(BaseSettings):
     clip_min_duration: float = 10.0
     clip_max_duration: float = 60.0
     candidate_pool_max: int = 80
-    candidate_llm_max: int = 40
-    llm_eval_batch: int = 4
-    vision_enabled: bool = True
-    vision_max_candidates: int = 20
-    vision_frames_per_candidate: int = 4
+    candidate_llm_max: int = 32
+    llm_eval_batch: int = 6
+    llm_parallel: int = 3
+    llm_eval_tokens_per_candidate: int = 150
+    vision_enabled: bool = False
+    vision_max_candidates: int = 10
+    vision_frames_per_candidate: int = 2
     dedupe_iou_threshold: float = 0.35
     dedupe_text_similarity: float = 0.72
 
@@ -107,9 +110,14 @@ class Settings(BaseSettings):
     render_crf: int = 20
     render_preset: str = "veryfast"
     render_audio_lufs: float = -14.0
-    render_workers: int = 2
+    render_workers: int = 3
     subtitle_font: str = "Arial"
     subtitle_font_size: int = 68
+
+    # --- Attention / conflict scoring ---------------------------------------
+    opening_window_seconds: float = 3.0
+    opening_weight: float = 0.22
+    conflict_weight: float = 0.18
 
     # --- Jobs ---------------------------------------------------------------
     job_workers: int = 2

@@ -39,6 +39,7 @@ class FasterWhisperProvider:
         self.device = s.whisper_device
         self.compute_type = s.whisper_compute_type
         self.beam_size = s.whisper_beam_size
+        self.cpu_threads = s.whisper_cpu_threads
         self.vad_filter = s.whisper_vad_filter
         self.configured_language = s.whisper_language or None
 
@@ -63,10 +64,14 @@ class FasterWhisperProvider:
                     self.compute_type,
                 )
                 try:
+                    kwargs = {}
+                    if self.cpu_threads > 0:
+                        kwargs["cpu_threads"] = self.cpu_threads
                     _model_cache[key] = WhisperModel(
                         self.model_size,
                         device=self.device,
                         compute_type=self.compute_type,
+                        **kwargs,
                     )
                 except Exception as exc:  # noqa: BLE001
                     raise ProviderUnavailable(

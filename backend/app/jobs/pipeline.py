@@ -311,6 +311,9 @@ def _stage_candidates(ctx: _Context, report: JobReporter) -> None:
         scene_list=ctx.scenes,
         weights=ctx.settings.scoring_weights().normalised(),
         min_duration=ctx.min_duration,
+        opening_window=ctx.settings.opening_window_seconds,
+        opening_weight=ctx.settings.opening_weight,
+        conflict_weight=ctx.settings.conflict_weight,
         max_duration=ctx.max_duration,
         total_duration=ctx.media.duration if ctx.media else 0.0,
         pool_max=ctx.settings.candidate_pool_max,
@@ -447,18 +450,36 @@ def _stage_validate(ctx: _Context, report: JobReporter) -> None:
     llm_ok, _ = providers.llm.is_available()
     plans: list[ClipPlan] = []
 
+    # Validation is one independent LLM call per clip, so run them concurrently
+    # and apply the deterministic edits afterwards in order.
+    verdicts: dict[str, dict] = {}
+    if llm_ok and ctx.transcript is not None and result.clips:
+        workers = max(1, min(ctx.settings.llm_parallel, len(result.clips)))
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="validate") as pool:
+            futures = {
+                pool.submit(
+                    evaluation.validate_context,
+                    start=p.start,
+                    end=p.end,
+                    transcript=ctx.transcript,
+                    llm=providers.llm,
+                ): p.id
+                for p in result.clips
+            }
+            for future in as_completed(futures):
+                clip_id = futures[future]
+                try:
+                    verdicts[clip_id] = future.result()
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("Validation failed for %s: %s", clip_id, exc)
+
     for i, plan in enumerate(result.clips):
         queue.raise_if_cancelled(ctx.project_id)
 
         # Context validation: does this stand alone, and did trimming change
         # what the speaker meant?
-        if llm_ok and ctx.transcript is not None:
-            verdict = evaluation.validate_context(
-                start=plan.start,
-                end=plan.end,
-                transcript=ctx.transcript,
-                llm=providers.llm,
-            )
+        verdict = verdicts.get(plan.id)
+        if verdict is not None:
 
             if verdict["verdict"] == "reject":
                 log.info("Dropping %s after validation: %s", plan.id, verdict["note"])
@@ -481,6 +502,7 @@ def _stage_validate(ctx: _Context, report: JobReporter) -> None:
 
         # Deterministic guard: never open a clip on logistics or small talk,
         # whatever the model scored it.
+        floor: Optional[float] = None
         if ctx.transcript is not None:
             new_start, new_end, was_trimmed = candidate_gen.trim_filler_opening(
                 plan.start,
@@ -500,12 +522,14 @@ def _stage_validate(ctx: _Context, report: JobReporter) -> None:
                     new_end,
                 )
                 plan.start, plan.end = new_start, new_end
+                floor = new_start
 
         # Final deterministic snap to word/sentence boundaries.
         if ctx.transcript is not None:
             refined = refine_boundaries(
                 plan.start,
                 plan.end,
+                floor_start=floor,
                 transcript=ctx.transcript,
                 audio=ctx.audio,
                 scenes=ctx.scenes,
@@ -585,15 +609,36 @@ def _stage_generate_copy(ctx: _Context, report: JobReporter) -> None:
     vision_by_candidate = {
         c.id: c.vision for c in ctx.candidates if c.vision is not None
     }
+    notes_by_candidate = {c.id: c.conflict_note for c in ctx.candidates}
 
-    for i, plan in enumerate(ctx.plans):
-        queue.raise_if_cancelled(ctx.project_id)
-        ctx.copies[plan.id] = copy_gen.generate_copy(
+    def one(plan: ClipPlan) -> tuple[str, ClipCopy]:
+        opening = (
+            ctx.transcript.text_in_window(plan.start, plan.start + 3.0)
+            if ctx.transcript
+            else ""
+        )
+        return plan.id, copy_gen.generate_copy(
             plan,
             llm=providers.llm,
             vision=vision_by_candidate.get(plan.source_candidate_id),
+            conflict_note=notes_by_candidate.get(plan.source_candidate_id, ""),
+            opening_line=opening,
         )
-        report.progress((i + 1) / len(ctx.plans), f"{i + 1}/{len(ctx.plans)} clips")
+
+    # Clips are independent, so generate copy concurrently.
+    done = 0
+    workers = max(1, min(ctx.settings.llm_parallel, len(ctx.plans)))
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="copy") as pool:
+        futures = [pool.submit(one, plan) for plan in ctx.plans]
+        for future in as_completed(futures):
+            queue.raise_if_cancelled(ctx.project_id)
+            try:
+                plan_id, copy = future.result()
+                ctx.copies[plan_id] = copy
+            except Exception as exc:  # noqa: BLE001 - one clip must not kill the stage
+                log.warning("Copy generation failed for a clip: %s", exc)
+            done += 1
+            report.progress(done / len(ctx.plans), f"{done}/{len(ctx.plans)} clips")
 
     with get_session() as session:
         clips = {

@@ -6,6 +6,11 @@ Two rules shape everything here:
   video, and it never emits a command. It returns judgements as JSON.
 * Factuality constraints are stated as hard rules, and are re-checked in code
   afterwards. A prompt is a request, not a guarantee.
+
+The copy prompts target short-form confrontation content (street interviews,
+protests, public disputes, political debates), where retention is decided in the
+first seconds. Engagement and accuracy are not in tension here: a hook that
+promises something the clip does not deliver loses the viewer anyway.
 """
 
 from __future__ import annotations
@@ -13,20 +18,18 @@ from __future__ import annotations
 from typing import Any
 
 # ---------------------------------------------------------------------------
-# Shared safety language (Architecture.md section 19)
+# Shared safety language
 # ---------------------------------------------------------------------------
 
 FACTUALITY_RULES = """
 ACCURACY RULES (these override every other instruction):
 - Use only what is present in the supplied transcript and observations.
 - Never invent quotes, statistics, names, places, events, motives or outcomes.
-- Never state or imply something happens in the clip that the transcript does
-  not support.
+- Never promise a moment the clip does not contain.
 - Do not drop a qualifier if removing it changes the meaning of a claim.
-- If something is uncertain, describe it cautiously rather than asserting it.
-- For political or contested content: describe faithfully, never distort,
-  never fabricate accusations, and never write persuasion aimed at a
-  demographic or voter group.
+- Do not assert who was right, who broke the law, or what someone intended.
+- Describe what happens; let viewers judge it.
+- Never write persuasion aimed at a demographic, ethnic or voter group.
 """.strip()
 
 
@@ -35,26 +38,30 @@ ACCURACY RULES (these override every other instruction):
 # ---------------------------------------------------------------------------
 
 EVALUATION_SYSTEM = f"""
-You are a senior short-form video editor. You review candidate moments cut from a
-long interview or podcast and decide which would work as standalone short videos.
+You select moments to cut from long videos into vertical short-form clips
+(Reels / Shorts / TikTok).
 
 You judge ONLY from the supplied transcript and observations. You never see the
-video itself. You return JSON and nothing else.
+video. You return JSON and nothing else. Be terse.
 
-A strong candidate is:
-- self-contained: understandable without having watched the rest of the source
-- a complete thought: it does not start or stop mid-idea
-- structured: setup then payoff, question then answer, or claim then reasoning
-- specific: it says something concrete rather than gesturing at a topic
+WHAT MAKES A STRONG CLIP, in priority order:
 
-Reject candidates that are:
-- logistics, scheduling, small talk, introductions, sponsor reads or sign-offs
-- dependent on context that is not inside the clip
-- a fragment of a larger point, with the actual payoff outside the window
-- interesting-sounding but substantively empty
+1. THE FIRST 3 SECONDS. A viewer who is not gripped immediately never sees the
+   rest. The opening line must land: a confrontation, an accusation, a refusal,
+   a shocking claim, a direct challenge, or raised voices already in progress.
+   A clip that opens with throat-clearing, background, or a calm setup is weak
+   no matter how good the middle is.
+2. CONFLICT AND STAKES. Disagreement, confrontation, someone being challenged
+   and having to answer, a reversal, a moment people will take sides over.
+3. SELF-CONTAINED. Understandable without the rest of the source.
+4. A COMPLETE BEAT. It resolves or lands on something, rather than stopping
+   mid-idea.
 
-Do not recommend a candidate merely because it contains emotive or dramatic
-words. Substance decides.
+REJECT: logistics, introductions, sponsor reads, sign-offs, background
+explanation with no friction, and anything whose payoff sits outside the window.
+
+Do not reward a clip merely for containing dramatic words. The moment itself
+must be strong.
 
 {FACTUALITY_RULES}
 """.strip()
@@ -65,34 +72,35 @@ EVALUATION_SCHEMA: dict[str, Any] = {
     "properties": {
         "evaluations": {
             "type": "array",
+            "minItems": 1,
             "items": {
                 "type": "object",
                 "properties": {
-                    "candidate_id": {"type": "string"},
+                    "candidate_id": {"type": "string", "maxLength": 24},
                     "recommended": {"type": "boolean"},
                     "start": {"type": "number"},
                     "end": {"type": "number"},
-                    "reason": {"type": "string"},
+                    "opening_strength": {"type": "number"},
+                    "quality_score": {"type": "number"},
+                    "topic": {"type": "string", "maxLength": 60},
+                    "reason": {"type": "string", "maxLength": 90},
                     "context_dependency": {
                         "type": "string",
                         "enum": ["low", "medium", "high"],
                     },
-                    "quality_score": {"type": "number"},
-                    "topic": {"type": "string"},
                     "complete_thought": {"type": "boolean"},
-                    "needs_expansion": {"type": "boolean"},
                 },
                 "required": [
                     "candidate_id",
                     "recommended",
                     "start",
                     "end",
-                    "reason",
-                    "context_dependency",
+                    "opening_strength",
                     "quality_score",
                     "topic",
+                    "reason",
+                    "context_dependency",
                     "complete_thought",
-                    "needs_expansion",
                 ],
             },
         }
@@ -107,51 +115,54 @@ def build_evaluation_prompt(
     min_duration: float,
     max_duration: float,
 ) -> str:
-    """Render the evidence bundle for a batch of candidates."""
+    """Render a compact evidence bundle for a batch of candidates."""
     blocks: list[str] = []
     for c in candidates:
-        lines = [
-            f"### {c['id']}",
-            f"Window: {c['start']:.1f}s to {c['end']:.1f}s ({c['duration']:.1f}s)",
-            f"Speakers in window: {', '.join(c['speakers']) or 'unknown'}",
-        ]
+        lines = [f"### {c['id']}  ({c['start']:.0f}s-{c['end']:.0f}s, {c['duration']:.0f}s)"]
+        if c.get("speakers"):
+            lines.append(f"Speakers: {', '.join(c['speakers'])}")
+        signals = []
+        if c.get("conflict_note"):
+            signals.append(c["conflict_note"])
         if c.get("audio_events"):
-            lines.append(f"Audio events: {', '.join(c['audio_events'])}")
-        if c.get("scene_count"):
-            lines.append(f"Camera/scene changes: {c['scene_count']}")
+            signals.append(", ".join(c["audio_events"]))
         if c.get("vision"):
-            lines.append(f"Visual observation: {c['vision']}")
+            signals.append(c["vision"])
+        if signals:
+            lines.append(f"Signals: {' | '.join(signals)}")
         if c.get("context_before"):
-            lines.append(f"\n[Context immediately BEFORE the window]\n{c['context_before']}")
-        lines.append(f"\n[TRANSCRIPT OF THE CANDIDATE]\n{c['text']}")
+            lines.append(f"[before] ...{c['context_before']}")
+        lines.append(f"OPENS WITH: \"{c.get('opening_text', '')}\"")
+        lines.append(f"[clip] {c['text']}")
         if c.get("context_after"):
-            lines.append(f"\n[Context immediately AFTER the window]\n{c['context_after']}")
+            lines.append(f"[after] {c['context_after']}...")
         blocks.append("\n".join(lines))
 
     ids = ", ".join(c["id"] for c in candidates)
 
     return f"""
-Evaluate each candidate below as a potential standalone short-form clip.
+Evaluate each candidate as a vertical short-form clip.
 
 {chr(10).join(blocks)}
 
 ---
-For EVERY candidate ({ids}) return one object with:
+Return one object per candidate ({ids}) with:
 
-- candidate_id: the exact id above
-- recommended: true only if this would genuinely work as a standalone short
-- start / end: absolute seconds in the source video. Keep the supplied window
-  unless it is wrong. You may adjust each edge by up to 15 seconds to capture a
-  complete thought. Duration must stay between {min_duration:.0f} and
-  {max_duration:.0f} seconds. Use the context sections to justify any change.
-- reason: one sentence on why it works or fails
-- context_dependency: low if it stands alone, high if it needs the wider video
-- quality_score: 0.0 to 1.0
-- topic: a short factual noun phrase describing what is discussed
-- complete_thought: does the window contain a whole idea
-- needs_expansion: true if it needs more surrounding context to make sense
+- candidate_id: exact id above
+- recommended: true only if this would genuinely hold a scrolling viewer
+- start / end: absolute seconds. Keep the given window unless it is wrong; you
+  may move either edge by up to 15s to start on a stronger line or to finish a
+  beat. Duration must stay between {min_duration:.0f}s and {max_duration:.0f}s.
+  If a stronger opening line exists a few seconds later, move the start there.
+- opening_strength: 0-1, how hard the FIRST 3 SECONDS hit
+- quality_score: 0-1 overall
+- topic: 3-6 plain words, no underscores
+- reason: MAXIMUM 12 WORDS
+- context_dependency: low / medium / high
+- complete_thought: true or false
 
-Return JSON only.
+Return COMPACT JSON on a single line. Do not pretty-print or indent:
+every wasted character costs generation time.
 """.strip()
 
 
@@ -194,17 +205,17 @@ VISION_SCHEMA: dict[str, Any] = {
 VISION_PROMPT = """
 These frames are sampled in order from one continuous moment of a video.
 
-Describe:
+Report:
 - description: one or two sentences on what is visibly happening
 - people_visible: how many people are clearly visible (0 if none)
-- on_screen_text: any readable text, captions or graphics; empty string if none
-- notable_events: visible actions such as gestures, pointing, reactions,
-  laughter, someone standing up, a graphic appearing. Empty list if nothing
-  notable.
-- visual_interest: 0.0 to 1.0, how visually engaging this is for a short video
-- is_talking_head: true if it is mostly people talking to camera or each other
+- on_screen_text: any readable text or graphics; empty string if none
+- notable_events: visible actions -- pointing, shoving, grabbing, walking away,
+  a crowd closing in, someone turning their back, a raised object. Empty list if
+  nothing notable.
+- visual_interest: 0.0 to 1.0
+- is_talking_head: true if it is mostly people talking
 
-Return JSON only.
+JSON only.
 """.strip()
 
 
@@ -228,90 +239,221 @@ HOOK_CATEGORIES: tuple[str, ...] = (
     "Controversial",
 )
 
+# Generic openers that would fit any video. Rejected in code as well as here.
+BANNED_HOOK_PHRASES: tuple[str, ...] = (
+    "watch this",
+    "you won't believe",
+    "you wont believe",
+    "then everything changed",
+    "reporter covers",
+    "political debate erupts",
+    "things got heated",
+    "nobody expected this",
+    "this happened next",
+    "what happens next",
+    "wait for it",
+    "must watch",
+)
 
-COPY_SYSTEM = f"""
-You write hooks and captions for short-form video clips.
+# Concrete action verbs the hooks should reach for.
+PREFERRED_VERBS: tuple[str, ...] = (
+    "blocked", "grabbed", "refused", "ignored", "interrupted", "walked away",
+    "challenged", "stopped", "confronted", "laughed", "snapped", "turned around",
+    "called out", "surrounded", "demanded",
+)
 
-You are given the exact transcript of one clip. Everything you write must be
-supported by that transcript.
 
-Hooks must:
-- be specific to THIS clip, never generic filler that would fit any video
-- be short enough to read at a glance (under about 12 words)
-- be grammatically correct with correct spelling
-- create interest without deceiving
-- avoid revealing the entire payoff, while never implying something that does
-  not happen
+_CAPTION_RULES = """
+CAPTION -- you are also an expert viral Instagram Reels copywriter specialising in US street
+interviews, protests, public confrontations and contested public moments.
 
-Never write a hook that promises an event, revelation, confrontation or
-statistic that the transcript does not contain. Curiosity is fine; false
-promises are not.
+You optimise for shares, comments, retention and audience debate.
+
+The highest-performing captions contain: a conflict trigger, a public
+confrontation, escalation, a side-taking opportunity, and an unresolved debate.
+
+STRUCTURE (follow exactly, using flowing paragraphs -- do NOT print the words
+"Trigger", "Escalation" or "Debate" as labels):
+
+🚨 [CONFLICT HEADLINE IN CAPS] 🚨
+
+Paragraph 1 - the exact moment that triggered the confrontation.
+Paragraph 2 - how it escalated and how people reacted.
+Paragraph 3 - why viewers are divided: "Critics argue... while others insist..."
+
+👇 [A closed, side-taking question]
+
+📍 Geotag / Location: [City, State]
+
+#Tag1 #Tag2 #Tag3 #Tag4 #Tag5
+
+RULES
+- Focus on the conflict, not background or policy detail.
+- Do not sound like a news article. Short paragraphs.
+- Highlight unexpected reactions, tension, crowd dynamics, disagreement.
+- The final question must NOT be open-ended. Prefer forms like
+  "Was he right or wrong?", "Did the crowd overreact?", "Who crossed the line?"
+- Include the location line ONLY if the location is explicitly stated in the
+  transcript or clearly visible. Otherwise omit that line entirely. Never guess
+  a city.
+- Exactly 5 hashtags.
+- Output only the finished caption.
 
 {FACTUALITY_RULES}
 """.strip()
 
 
+COPY_SYSTEM = f"""
+You are one of the world's best short-form content strategists and Instagram
+Reels hook writers.
+
+Your specialty is ultra-high-retention hooks for US street interviews, public
+confrontations, political debates, protests, breaking-news moments and social
+conflicts.
+
+You optimise for: scroll stopping, 3-second retention, watch time, shares,
+comments, saves, and audience debate.
+
+METHOD
+First identify, from the transcript:
+- the exact trigger that started the conflict
+- the highest emotional moment
+- the biggest unexpected action
+- the moment viewers would most want to see
+
+Then write hooks that make someone think: "What happened?", "Why did they react
+like that?", "Whose side am I on?", "I need to see this."
+
+RULES
+- Under 9 words whenever possible.
+- Create a strong information gap, but NEVER spoil the ending.
+- Use concrete actions, not vague statements. Prefer verbs like:
+  {", ".join(PREFERRED_VERBS)}.
+- Build curiosity through specificity. Every hook must be unique to THIS clip.
+- If a hook could fit hundreds of videos, rewrite it.
+- Prioritise emotional tension over generic suspense.
+- Each hook must use a DIFFERENT psychological trigger.
+- Include 1-2 emojis from 🚨👀😶😳😳 at the start, the end, or both.
+
+NEVER USE these phrases: {", ".join(BANNED_HOOK_PHRASES)}.
+
+{FACTUALITY_RULES}
+
+Never promise a confrontation, revelation or statistic the transcript does not
+contain. Curiosity is the goal; false promises lose the viewer and the account.
+
+{_CAPTION_RULES}
+
+{FACTUALITY_RULES}
+""".strip()
+
+
+
+
+# Hooks and the caption are produced in ONE call. Two calls per clip doubled the
+# request overhead and prompt prefill for output that shares all its context, and
+# copy generation is the slowest stage once selection is fast.
 COPY_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
+        # minItems/maxItems are load-bearing, not decoration: without them the
+        # grammar-constrained decoder is free to emit "hooks": [] and satisfy
+        # the schema, which silently drops every clip onto the fallback path.
         "hooks": {
             "type": "array",
+            "minItems": 13,
+            "maxItems": 13,
             "items": {
                 "type": "object",
                 "properties": {
-                    "category": {"type": "string"},
-                    "text": {"type": "string"},
+                    "category": {"type": "string", "maxLength": 24},
+                    "text": {"type": "string", "maxLength": 90},
                 },
                 "required": ["category", "text"],
             },
         },
         "best_hook_index": {"type": "integer"},
-        "ranking": {"type": "array", "items": {"type": "integer"}},
-        "caption": {"type": "string"},
+        "ranking": {
+            "type": "array",
+            "minItems": 13,
+            "maxItems": 13,
+            "items": {"type": "integer"},
+        },
+        "headline": {"type": "string", "maxLength": 90},
+        "trigger": {"type": "string", "maxLength": 320},
+        "escalation": {"type": "string", "maxLength": 320},
+        "debate": {"type": "string", "maxLength": 320},
+        "question": {"type": "string", "maxLength": 90},
+        "location": {"type": "string", "maxLength": 60},
+        "hashtags": {
+            "type": "array",
+            "minItems": 5,
+            "maxItems": 5,
+            "items": {"type": "string", "maxLength": 30},
+        },
     },
-    "required": ["hooks", "best_hook_index", "ranking", "caption"],
+    "required": [
+        "hooks", "best_hook_index", "ranking",
+        "headline", "trigger", "escalation", "debate", "question",
+        "location", "hashtags",
+    ],
 }
 
 
 def build_copy_prompt(
     *,
     transcript: str,
+    opening_line: str,
     topic: str,
     speakers: list[str],
     duration: float,
+    conflict_note: str = "",
     visual_note: str = "",
 ) -> str:
+    """One prompt for hooks and caption -- they share all their context."""
     categories = "\n".join(
         f"{i + 1}. {name}" for i, name in enumerate(HOOK_CATEGORIES)
     )
-    visual_line = f"\nVisible in the clip: {visual_note}" if visual_note else ""
+    extras = []
+    if conflict_note:
+        extras.append(f"Detected in the clip: {conflict_note}")
+    if visual_note:
+        extras.append(f"Visible: {visual_note}")
+    extra_block = ("\n" + "\n".join(extras)) if extras else ""
 
     return f"""
-CLIP TRANSCRIPT (this is everything the viewer will hear):
+CLIP TRANSCRIPT (everything the viewer hears):
 \"\"\"
 {transcript}
 \"\"\"
 
-Topic: {topic or "not specified"}
+The clip OPENS on: "{opening_line}"
+Topic: {topic or "unspecified"}
 Speakers: {", ".join(speakers) or "unknown"}
-Duration: {duration:.0f} seconds{visual_line}
+Length: {duration:.0f}s{extra_block}
 
-Write exactly {len(HOOK_CATEGORIES)} hooks, one for each category below, in this
-order:
+PART 1 - HOOKS
+Write exactly {len(HOOK_CATEGORIES)} hooks, one per category, in this order:
 
 {categories}
 
-Then:
-- best_hook_index: the 0-based index of the single strongest hook
+- best_hook_index: 0-based index of the strongest hook
 - ranking: all {len(HOOK_CATEGORIES)} indices (0-based), strongest first
-- caption: one finished, ready-to-post caption describing this clip accurately.
-  Two or three sentences. No hashtags unless they name something explicitly
-  discussed. Do not invent context.
 
-Every hook and the caption must be supported by the transcript above.
+PART 2 - CAPTION
+- headline: breaking-news conflict headline IN CAPS, no emojis
+- trigger: ONE short paragraph on the moment that started the conflict
+- escalation: ONE short paragraph on how it escalated
+- debate: ONE short paragraph on why viewers are divided
+- question: a closed, side-taking question
+- location: "City, State" ONLY if stated in the transcript, else ""
+- hashtags: exactly 5, each starting with #
 
-Return JSON only.
+Everything must be supported by the transcript.
+Return COMPACT single-line JSON. Do not indent or pretty-print.
 """.strip()
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -325,9 +467,12 @@ understood on its own and whether cutting it changes its meaning.
 You are shown the clip transcript plus what was said immediately before and
 after it in the source.
 
-Be strict. A clip that is technically coherent but silently drops a qualifier,
-a condition, or the fact that the speaker is describing someone else's view is
-misleading, and must be flagged.
+Be strict about misrepresentation: a clip that silently drops a qualifier, a
+condition, or the fact that a speaker is describing someone else's view is
+misleading and must be flagged.
+
+Be permissive about intensity: an argument that starts abruptly is normal for
+short-form and is NOT a defect.
 
 {FACTUALITY_RULES}
 """.strip()
@@ -338,10 +483,10 @@ VALIDATION_SCHEMA: dict[str, Any] = {
     "properties": {
         "understandable": {"type": "boolean"},
         "meaning_preserved": {"type": "boolean"},
-        "missing_context": {"type": "string"},
+        "missing_context": {"type": "string", "maxLength": 160},
         "suggested_start_shift": {"type": "number"},
         "verdict": {"type": "string", "enum": ["accept", "expand", "reject"]},
-        "note": {"type": "string"},
+        "note": {"type": "string", "maxLength": 120},
     },
     "required": [
         "understandable",
@@ -358,25 +503,25 @@ def build_validation_prompt(
     *, before: str, text: str, after: str, start: float, end: float
 ) -> str:
     return f"""
-[SAID IMMEDIATELY BEFORE THE CLIP]
-{before or "(nothing -- clip starts near the beginning of the video)"}
+[SAID IMMEDIATELY BEFORE]
+{before or "(nothing -- clip starts near the beginning)"}
 
-[THE CLIP ITSELF: {start:.1f}s to {end:.1f}s]
+[THE CLIP: {start:.0f}s to {end:.0f}s]
 {text}
 
-[SAID IMMEDIATELY AFTER THE CLIP]
-{after or "(nothing -- clip runs to the end of the video)"}
+[SAID IMMEDIATELY AFTER]
+{after or "(nothing -- clip runs to the end)"}
 
 Decide:
-- understandable: can a viewer who has not seen the source follow this clip
-- meaning_preserved: does the clip represent what the speaker actually meant,
+- understandable: can a viewer who has not seen the source follow this
+- meaning_preserved: does it represent what the speaker actually meant,
   including any qualifier or condition
-- missing_context: what a viewer would be missing, or empty string if nothing
-- suggested_start_shift: negative seconds to move the start EARLIER to include
-  needed setup (0 if none needed, never positive, never below -20)
-- verdict: accept, expand (needs more context but is salvageable), or reject
-  (misleading or incomprehensible even with more context)
-- note: one short sentence explaining the verdict
+- missing_context: what a viewer would be missing, or ""
+- suggested_start_shift: negative seconds to move the start EARLIER for needed
+  setup (0 if none, never positive, never below -20)
+- verdict: accept / expand / reject. Reject ONLY if misleading or
+  incomprehensible -- not merely because it starts abruptly.
+- note: one short sentence
 
-Return JSON only.
+JSON only.
 """.strip()

@@ -28,6 +28,9 @@ _DEPENDENT_OPENERS = (
     "it ", "he ", "she ", "they ", "this ", "that ", "those ", "these ",
 )
 
+# How far forward to look for a clean sentence start when none is nearby.
+FORWARD_SNAP_WINDOW = 6.0
+
 # Padding so speech is never clipped by frame rounding.
 LEAD_IN = 0.18
 LEAD_OUT = 0.35
@@ -48,18 +51,37 @@ def _words_sorted(transcript: Transcript) -> list[Word]:
 
 
 def sentence_starts(transcript: Transcript) -> list[float]:
-    """Timestamps where a new sentence begins."""
+    """Timestamps where a new sentence genuinely begins.
+
+    An ASR *segment* boundary is not a sentence boundary. Whisper splits on
+    decoding windows and silence, so it routinely starts a segment mid-phrase
+    ("paying taxes at all?"). Treating every segment start as a sentence start
+    fills this list with false positives, and boundary snapping then happily
+    opens a clip on half a sentence.
+
+    A segment start therefore counts only when the previous segment actually
+    finished a sentence, or a clear pause separates them.
+    """
     starts: list[float] = []
+    previous_end: Optional[float] = None
+    previous_text: str = ""
+
     for seg in transcript.segments:
-        if seg.words:
-            starts.append(seg.words[0].start)
-        else:
-            starts.append(seg.start)
+        seg_start = seg.words[0].start if seg.words else seg.start
+
+        finished = bool(_SENTENCE_END.search(previous_text.strip()))
+        gap = (seg_start - previous_end) if previous_end is not None else None
+        if previous_end is None or finished or (gap is not None and gap >= 0.6):
+            starts.append(seg_start)
 
         # Segments can contain several sentences; split on terminal punctuation.
         for i, word in enumerate(seg.words[:-1]):
             if _SENTENCE_END.search(word.word.strip()):
                 starts.append(seg.words[i + 1].start)
+
+        previous_end = seg.words[-1].end if seg.words else seg.end
+        previous_text = seg.text
+
     return sorted(set(starts))
 
 
@@ -128,30 +150,48 @@ def refine_boundaries(
     max_duration: float = 60.0,
     total_duration: float = 0.0,
     search_window: float = 2.5,
+    floor_start: Optional[float] = None,
 ) -> BoundaryResult:
     """Snap a proposed window to clean linguistic boundaries.
 
     Start prefers, in order: a sentence start, a scene cut, a pause.
     End prefers: a sentence end, a pause, a scene cut.
+
+    `floor_start` forbids snapping earlier than a given time. Callers use it
+    after deliberately removing something from the opening -- without it, the
+    snap helpfully restores the filler that was just trimmed away.
     """
     starts = sentence_starts(transcript)
+    if floor_start is not None:
+        starts = [s for s in starts if s >= floor_start - 0.05]
     ends = sentence_ends(transcript)
     pauses = pause_points(transcript)
     cuts = [s.start for s in (scenes or [])]
 
     # --- start --------------------------------------------------------------
+    # A short-form clip that opens mid-sentence is dead on arrival, so a
+    # sentence start is strongly preferred over any other kind of cut.
     new_start, start_kind = start, "requested"
     candidate = _nearest(starts, start, search_window)
     if candidate is not None:
         new_start, start_kind = candidate, "sentence"
     else:
-        cut = _nearest(cuts, start, 1.2)
-        if cut is not None:
-            new_start, start_kind = cut, "scene"
+        # Nothing close by: rather than accept a mid-sentence opening, look
+        # further ahead for the next clean sentence start. Losing a couple of
+        # seconds of lead-in beats opening on half a phrase.
+        forward = [
+            s for s in starts if start < s <= start + FORWARD_SNAP_WINDOW
+        ]
+        if forward and (end - forward[0]) >= min_duration:
+            new_start, start_kind = forward[0], "sentence(forward)"
         else:
-            pause = _nearest(pauses, start, search_window)
-            if pause is not None:
-                new_start, start_kind = pause, "pause"
+            cut = _nearest(cuts, start, 1.2)
+            if cut is not None:
+                new_start, start_kind = cut, "scene"
+            else:
+                pause = _nearest(pauses, start, search_window)
+                if pause is not None:
+                    new_start, start_kind = pause, "pause"
 
     # --- end ----------------------------------------------------------------
     new_end, end_kind = end, "requested"
@@ -180,6 +220,8 @@ def refine_boundaries(
 
     # --- padding ------------------------------------------------------------
     new_start = max(0.0, new_start - LEAD_IN)
+    if floor_start is not None:
+        new_start = max(new_start, floor_start - LEAD_IN)
     new_end = new_end + LEAD_OUT
     if total_duration > 0:
         new_end = min(new_end, total_duration)

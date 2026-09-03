@@ -31,7 +31,7 @@ def format_timecode(seconds: float) -> str:
 
 def render_hooks_txt(copy: ClipCopy) -> str:
     """Render Hooks.txt in the required layout."""
-    lines: list[str] = ["BEST HOOK", ""]
+    lines: list[str] = ["🏆 BEST HOOK", ""]
     lines.append(copy.best_hook or "(none generated)")
     lines.extend(["", ""])
 

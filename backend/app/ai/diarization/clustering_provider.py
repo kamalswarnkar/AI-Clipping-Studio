@@ -106,7 +106,7 @@ def _estimate_speaker_count(features: np.ndarray, max_speakers: int) -> int:
     if upper < 2:
         return 1
 
-    best_k, best_score = 1, -1.0
+    scores: dict[int, float] = {}
     for k in range(2, upper + 1):
         try:
             labels = AgglomerativeClustering(n_clusters=k, linkage="ward").fit_predict(
@@ -114,14 +114,29 @@ def _estimate_speaker_count(features: np.ndarray, max_speakers: int) -> int:
             )
             if len(set(labels)) < 2:
                 continue
-            score = float(silhouette_score(features, labels))
+            scores[k] = float(silhouette_score(features, labels))
         except Exception:  # noqa: BLE001
             continue
-        if score > best_score:
-            best_k, best_score = k, score
 
-    # Below this, the "clusters" are noise rather than distinct voices.
-    return best_k if best_score >= 0.12 else 1
+    if not scores:
+        return 1
+
+    best_k = max(scores, key=lambda k: scores[k])
+    best_score = scores[best_k]
+
+    # Real-world recordings (street noise, wind, crowds, varying mic distance)
+    # produce genuinely lower silhouette scores than studio audio -- around 0.10
+    # for a clean two-person split. A stricter bar collapses everything to one
+    # speaker, which silently disables every conversation-based signal.
+    if best_score < 0.08:
+        return 1
+
+    # Prefer the smallest k whose score is within a whisker of the best, so one
+    # speaker recorded at varying distances is not split into several.
+    for k in sorted(scores):
+        if scores[k] >= best_score - 0.01:
+            return k
+    return best_k
 
 
 class ClusteringDiarizationProvider:

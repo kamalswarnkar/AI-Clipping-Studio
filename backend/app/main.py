@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -21,6 +22,14 @@ log = logging.getLogger(__name__)
 
 
 def configure_logging(level: str) -> None:
+    # Generated hooks and captions contain emoji; a cp1252 console would raise
+    # UnicodeEncodeError from inside the logging call and take down the worker.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
     logging.basicConfig(
         level=getattr(logging, level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",

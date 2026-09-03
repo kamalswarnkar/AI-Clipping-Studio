@@ -62,7 +62,7 @@ def analyze_visuals(
     *,
     source_width: int,
     source_height: int,
-    sample_interval: float = 0.5,
+    sample_interval: float = 1.0,
     progress: Optional[Callable[[float, str], None]] = None,
 ) -> VisualAnalysis:
     """Sample the proxy and record per-frame observations.
@@ -106,32 +106,46 @@ def analyze_visuals(
             prev_gray = gray
 
             # --- faces
+            # Detect on a downscaled copy: Haar cost is quadratic in pixels and
+            # face positions only need to be accurate to a few source pixels for
+            # cropping. This is the difference between minutes and seconds on a
+            # long video.
             boxes: list[FaceBox] = []
             if frontal is not None:
-                equalised = cv2.equalizeHist(gray)
+                det_w = 320
+                det_scale = det_w / gray.shape[1] if gray.shape[1] > det_w else 1.0
+                small = (
+                    cv2.resize(gray, (det_w, int(gray.shape[0] * det_scale)))
+                    if det_scale < 1.0
+                    else gray
+                )
+                back = (1.0 / det_scale) if det_scale else 1.0
+                equalised = cv2.equalizeHist(small)
                 detections = frontal.detectMultiScale(
-                    equalised, scaleFactor=1.15, minNeighbors=5, minSize=(24, 24)
+                    equalised, scaleFactor=1.2, minNeighbors=5, minSize=(18, 18)
                 )
                 for (x, y, w, h) in detections:
                     boxes.append(
                         FaceBox(
-                            x=int(x * scale_x),
-                            y=int(y * scale_y),
-                            w=int(w * scale_x),
-                            h=int(h * scale_y),
+                            x=int(x * back * scale_x),
+                            y=int(y * back * scale_y),
+                            w=int(w * back * scale_x),
+                            h=int(h * back * scale_y),
                             confidence=0.8,
                         )
                     )
-                if profile is not None and len(boxes) < 2:
+                # The profile cascade roughly doubles cost, so only fall back to
+                # it when the frontal pass found nothing at all.
+                if profile is not None and not boxes:
                     for (x, y, w, h) in profile.detectMultiScale(
-                        equalised, scaleFactor=1.2, minNeighbors=5, minSize=(24, 24)
+                        equalised, scaleFactor=1.25, minNeighbors=5, minSize=(18, 18)
                     ):
                         boxes.append(
                             FaceBox(
-                                x=int(x * scale_x),
-                                y=int(y * scale_y),
-                                w=int(w * scale_x),
-                                h=int(h * scale_y),
+                                x=int(x * back * scale_x),
+                                y=int(y * back * scale_y),
+                                w=int(w * back * scale_x),
+                                h=int(h * back * scale_y),
                                 confidence=0.55,
                             )
                         )

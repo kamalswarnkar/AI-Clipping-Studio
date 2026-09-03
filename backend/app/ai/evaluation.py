@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Optional
 
+from ..config import get_settings
 from ..models.domain import (
     Candidate,
     ContextDependency,
@@ -113,13 +115,17 @@ def evaluate_candidates(
     A failed batch degrades the result (those candidates fall back to their
     heuristic score) but never aborts the run.
     """
-    evaluations: list[LLMEvaluation] = []
     by_id = {c.id: c for c in candidates}
     batches = [
         candidates[i : i + batch_size] for i in range(0, len(candidates), batch_size)
     ]
+    if not batches:
+        return []
 
-    for batch_index, batch in enumerate(batches):
+    settings = get_settings()
+    tokens_each = max(40, settings.llm_eval_tokens_per_candidate)
+
+    def run_batch(batch: list[Candidate]) -> list[LLMEvaluation]:
         payload = [
             {
                 "id": c.id,
@@ -127,11 +133,14 @@ def evaluate_candidates(
                 "end": c.end,
                 "duration": c.duration,
                 "text": c.text,
-                "context_before": c.context_before,
-                "context_after": c.context_after,
+                # Context is trimmed hard: prompt prefill is cheap per token but
+                # not free, and this stage dominates total runtime.
+                "context_before": c.context_before[-200:],
+                "context_after": c.context_after[:200],
                 "speakers": c.speakers,
                 "audio_events": c.audio_events,
-                "scene_count": c.scene_count,
+                "opening_text": c.text[:110],
+                "conflict_note": c.conflict_note,
                 "vision": c.vision.description if c.vision else "",
             }
             for c in batch
@@ -146,24 +155,17 @@ def evaluate_candidates(
                 system=P.EVALUATION_SYSTEM,
                 prompt=prompt,
                 schema=P.EVALUATION_SCHEMA,
-                max_tokens=280 * len(batch),
+                max_tokens=tokens_each * len(batch),
             )
         except ProviderError as exc:
-            log.warning(
-                "LLM evaluation failed for batch %d/%d: %s",
-                batch_index + 1,
-                len(batches),
-                exc,
-            )
-            if progress:
-                progress((batch_index + 1) / len(batches), "batch failed, continuing")
-            continue
+            log.warning("LLM evaluation failed for a batch: %s", exc)
+            return []
 
         items = result.get("evaluations")
         if not isinstance(items, list):
-            log.warning("Batch %d returned no evaluations array", batch_index + 1)
-            items = []
+            return []
 
+        out: list[LLMEvaluation] = []
         seen: set[str] = set()
         for raw in items:
             if not isinstance(raw, dict):
@@ -183,13 +185,26 @@ def evaluate_candidates(
                 total_duration=total_duration,
             )
             if evaluation is not None:
-                evaluations.append(evaluation)
+                out.append(evaluation)
+        return out
 
-        if progress:
-            progress(
-                (batch_index + 1) / len(batches),
-                f"{len(evaluations)} evaluated",
-            )
+    # Batches are independent, so run several concurrently. Ollama serves
+    # overlapping requests and the wall-clock win is substantial even though
+    # aggregate token throughput is roughly flat.
+    evaluations: list[LLMEvaluation] = []
+    workers = max(1, min(settings.llm_parallel, len(batches)))
+    done = 0
+
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="llm-eval") as pool:
+        futures = [pool.submit(run_batch, batch) for batch in batches]
+        for future in as_completed(futures):
+            try:
+                evaluations.extend(future.result())
+            except Exception as exc:  # noqa: BLE001 - one batch must not kill the stage
+                log.warning("Evaluation batch raised: %s", exc)
+            done += 1
+            if progress:
+                progress(done / len(batches), f"{len(evaluations)} evaluated")
 
     return evaluations
 
