@@ -92,6 +92,14 @@ def _build_video_filter(
     strategy = "no reframing"
     keyframe_count = 0
 
+    # Exclude any burned-in caption band at the bottom of the source, so the
+    # vertical crop is computed against picture we actually want to keep.
+    usable_h = media.height
+    band = getattr(visual, "subtitle_band_top", None) if visual else None
+    if band and 0.5 < band < 1.0:
+        usable_h = max(int(media.height * 0.5), int(media.height * band))
+        usable_h -= usable_h % 2
+
     if options.vertical:
         if options.smart_reframe:
             keyframes, strategy = reframe.compute_crop_path(
@@ -99,19 +107,21 @@ def _build_video_filter(
                 start=plan.start,
                 end=plan.end,
                 source_w=media.width,
-                source_h=media.height,
+                source_h=usable_h,
                 target_w=options.width,
                 target_h=options.height,
             )
+            if usable_h != media.height:
+                strategy += "; source captions cropped out"
         else:
             crop_w, crop_h = reframe._crop_size(
-                media.width, media.height, options.width, options.height
+                media.width, usable_h, options.width, options.height
             )
             keyframes = [
                 CropKeyframe(
                     t=0.0,
                     x=max(0, (media.width - crop_w) // 2),
-                    y=max(0, (media.height - crop_h) // 2),
+                    y=max(0, (usable_h - crop_h) // 2),
                     w=crop_w,
                     h=crop_h,
                 )
@@ -121,7 +131,7 @@ def _build_video_filter(
         keyframe_count = len(keyframes)
         crop_w, crop_h = keyframes[0].w, keyframes[0].h
 
-        if crop_w < media.width or crop_h < media.height:
+        if crop_w < media.width or crop_h < usable_h or usable_h < media.height:
             x_expr = reframe.build_crop_expression(keyframes, "x")
             y_expr = reframe.build_crop_expression(keyframes, "y")
             parts.append(f"crop={crop_w}:{crop_h}:x='{x_expr}':y='{y_expr}'")

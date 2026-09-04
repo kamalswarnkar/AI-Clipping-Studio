@@ -206,6 +206,10 @@ class VisualAnalysis(BaseModel):
     sample_interval: float = 1.0
     frame_width: int = 0
     frame_height: int = 0
+    # Fraction of frame height at which burned-in source subtitles begin, or
+    # None when the source has none. The renderer crops this band away so the
+    # 9:16 conversion does not slice someone else's captions in half.
+    subtitle_band_top: Optional[float] = None
 
     def frames_between(self, start: float, end: float) -> list[FrameAnalysis]:
         return [f for f in self.frames if start <= f.t <= end]

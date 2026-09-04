@@ -42,7 +42,7 @@ validated and clamped, and a deterministic renderer performs every cut.
 | `LLM_EVALUATE` | LLM judgement, batched and run concurrently | **expensive** |
 | `VALIDATE` | context check, filler trim, dedupe, word-boundary snap | moderate |
 | `GENERATE_COPY` | 13 hooks + caption, fact-checked against the transcript | moderate |
-| `RENDER` | trim → smart 9:16 crop → loudnorm → burn captions → H.264 | moderate |
+| `RENDER` | trim → drop source caption band → smart 9:16 crop → loudnorm → burn captions → H.264 | moderate |
 
 Only the strongest candidates reach the expensive stages. That staging is what
 keeps a 90-minute video tractable on a desktop GPU.
@@ -120,6 +120,7 @@ The settings you are most likely to change:
 | `OPENING_WEIGHT` | `0.22` | How much the first 3 seconds count toward selection |
 | `CONFLICT_WEIGHT` | `0.18` | Weight for shouting / interruption / confrontation |
 | `RENDER_WORKERS` | `3` | Parallel clip renders |
+| `REMOVE_SOURCE_SUBTITLES` | `true` | Detect captions already burned into the source and crop that band away before the 9:16 conversion |
 | `CLIP_MIN_DURATION` / `CLIP_MAX_DURATION` | `10` / `60` | Also settable per project in the UI |
 
 Scoring weights live in `backend/config/scoring.json` and can be tuned without
@@ -171,10 +172,32 @@ rather than left to the model:
 - **Openings are protected.** A clip may not start mid-sentence or on a greeting,
   logistics or channel intro, because the first three seconds decide whether a
   short-form clip is watched at all.
+- **Internal speaker tags never reach a viewer.** Diarization knows there were
+  three distinct voices, not who they were, so "Speaker C" is withheld from the
+  copy prompt and stripped from output if it appears anyway.
+- **A geotag is only printed when the city is actually named in the clip.**
+  Matching the state alone would publish a city the video never mentions.
 
 For political or contested material the system transcribes, clips and describes
 faithfully. It does not do voter targeting, demographic persuasion, or
 optimisation of political messaging.
+
+---
+
+## Working with sources that already have captions
+
+Plenty of footage arrives with captions already burned in. Converting 16:9 to
+9:16 keeps the full height but discards most of the width, which slices those
+captions down the middle -- and the app would then burn its own captions on top
+of the wreckage.
+
+`ANALYZE_VISUALS` therefore looks for the signature of outlined caption text
+(a very bright pixel with a very dark pixel a few pixels away, centred
+horizontally, low in the frame). When it finds a band, the renderer excludes it
+before computing the vertical crop, so exactly one clean set of captions
+survives. Sources without burned-in captions are left untouched.
+
+Set `REMOVE_SOURCE_SUBTITLES=false` to disable the behaviour.
 
 ---
 

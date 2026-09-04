@@ -217,3 +217,107 @@ def dominant_face_count(analysis: VisualAnalysis, start: float, end: float) -> i
     if not frames:
         return 0
     return int(np.median([len(f.faces) for f in frames]))
+
+
+def detect_subtitle_band(
+    video_path: Path,
+    *,
+    samples: int = 48,
+) -> Optional[float]:
+    """Find burned-in subtitles along the bottom of the source.
+
+    Returns the fraction of frame height at which the band starts (so the caller
+    can crop it away), or None when no band is found.
+
+    Why this matters: converting 16:9 to 9:16 keeps full height but throws away
+    most of the width, which slices burned-in captions down the middle. The
+    result looks broken, and the app then burns its own captions on top of the
+    wreckage. Removing the band first leaves one clean set of captions.
+
+    Detection keys on the signature of outlined caption text -- a very bright
+    pixel with a very dark pixel within a few pixels. Ordinary bright scenery
+    (sky, signage, clothing) lacks that dark companion, which is what makes this
+    separable where plain edge density is not.
+    """
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        return None
+
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+    if total <= 0 or height <= 0 or width <= 0:
+        cap.release()
+        return None
+
+    # Captions are centred; the outer fifths hold logos and lower-third banners.
+    x0, x1 = int(width * 0.20), int(width * 0.80)
+    kernel = np.ones((5, 5), np.uint8)
+
+    profiles: list[np.ndarray] = []
+    for index in np.linspace(total * 0.05, total * 0.95, samples).astype(int):
+        cap.set(cv2.CAP_PROP_POS_FRAMES, int(index))
+        ok, frame = cap.read()
+        if not ok:
+            continue
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)[:, x0:x1]
+        glyph = (gray > 200) & (cv2.erode(gray, kernel) < 80)
+        profiles.append(glyph.astype(np.float32).mean(axis=1))
+
+    cap.release()
+    if len(profiles) < 8:
+        return None
+
+    profile = np.vstack(profiles).mean(axis=0)
+
+    lower_start = int(height * 0.60)
+    baseline = float(np.percentile(profile[:lower_start], 90))
+    region = profile[lower_start:]
+    peak = float(region.max())
+
+    # Require both an absolute presence and a clear margin over the rest of the
+    # frame, so videos without burned-in captions are left alone.
+    if peak < 0.018 or peak < baseline * 1.6:
+        log.info(
+            "No burned-in subtitle band (peak=%.4f, baseline=%.4f)", peak, baseline
+        )
+        return None
+
+    # Grow outward from the PEAK, not from the topmost hit anywhere below.
+    # Lower-third banners and station logos also clear the threshold, and
+    # anchoring on them would crop away a quarter of the frame.
+    threshold = max(baseline * 1.2, peak * 0.25)
+    above = profile >= threshold
+    peak_row = lower_start + int(region.argmax())
+
+    band_top = peak_row
+    while band_top - 1 >= lower_start and above[band_top - 1]:
+        band_top -= 1
+
+    # Captions wrap to two lines with a gap between them; look a little further
+    # up for a second line rather than slicing its top off.
+    lookup = int(height * 0.08)
+    probe = band_top - 1
+    while probe >= max(lower_start, band_top - lookup):
+        if above[probe]:
+            band_top = probe
+            while band_top - 1 >= lower_start and above[band_top - 1]:
+                band_top -= 1
+            probe = band_top - 1
+            continue
+        probe -= 1
+
+    # A small margin above the glyphs catches descenders and outline bleed.
+    band_top = max(lower_start, band_top - int(height * 0.015))
+
+    # Never sacrifice more than a fifth of the frame on a heuristic.
+    fraction = max(0.80, min(0.97, band_top / height))
+
+    log.info(
+        "Burned-in subtitle band detected from %.1f%% of height "
+        "(peak=%.4f vs baseline=%.4f)",
+        fraction * 100,
+        peak,
+        baseline,
+    )
+    return fraction

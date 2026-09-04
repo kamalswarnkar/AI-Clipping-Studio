@@ -37,6 +37,13 @@ _QUOTED = re.compile(
     r"|(?<![\w’])‘([^’]{8,})’(?![\w])"
 )
 _WORD = re.compile(r"[a-z0-9']+")
+
+# "Speaker A" and friends are internal diarization tags, not people. They must
+# never surface in copy, so they are stripped from output as well as withheld
+# from the prompt.
+# The trailing boundary is essential: without it "Speaker Demands" matches
+# "Speaker D" and the substitution swallows the D, yielding "speakeremands".
+_SPEAKER_LABEL = re.compile(r"\bspeakers?\s+[A-Z]\b", re.I)
 _EMOJI = re.compile(
     "[\U0001F300-\U0001FAFF\U00002600-\U000027BF\U0001F1E6-\U0001F1FF]"
 )
@@ -126,6 +133,60 @@ def check_hook_quality(text: str) -> tuple[bool, str]:
     return True, ""
 
 
+def strip_speaker_labels(text: str) -> str:
+    """Remove internal diarization tags from generated copy.
+
+    Diarization knows there were three distinct voices, not who they were.
+    "Speaker C says..." is meaningless to a viewer, so any label that survives
+    the prompt is rewritten into role-neutral phrasing here.
+    """
+    if not text or not _SPEAKER_LABEL.search(text):
+        return text
+
+    text = _SPEAKER_LABEL.sub("one speaker", text)
+    # "one speaker and one speaker" reads worse than the thing it replaced.
+    text = re.sub(
+        r"one speaker\s+and\s+one speaker", "two people", text, flags=re.I
+    )
+    # Tidy the articles the substitution leaves behind.
+    text = re.sub(r"(?:a|an|the)\s+one speaker", "one speaker", text, flags=re.I)
+    text = re.sub(r"\s{2,}", " ", text).strip()
+    return text[:1].upper() + text[1:] if text else text
+
+
+def _clean_paragraph(text: str) -> str:
+    """Strip padding the model adds to satisfy a minimum length.
+
+    A length floor makes a small model repeat hashtags and emoji inside body
+    paragraphs to reach the count. Hashtags belong only in the final line, and
+    the reference captions use emoji solely in the headline and the question.
+    """
+    text = strip_speaker_labels(text.strip())
+    text = re.sub(r"\s*#\w+", "", text)
+    text = _EMOJI.sub("", text)
+    text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+    return re.sub(r"\s{2,}", " ", text).strip()
+
+
+def _location_is_supported(location: str, transcript: str) -> bool:
+    """Keep a geotag only when the place is actually named in the clip.
+
+    The model will happily supply a plausible city. Treating that as verified
+    would put an invented location on a published post.
+    """
+    if not location.strip():
+        return False
+    lowered = transcript.lower()
+    parts = [p.strip() for p in re.split(r"[,/]", location) if p.strip()]
+    if not parts:
+        return False
+    # Require the most specific component -- the city. Accepting any part lets
+    # "Sacramento, California" through on the strength of "California" alone,
+    # publishing a city the clip never mentions.
+    city = parts[0]
+    return len(city) > 2 and city.lower() in lowered
+
+
 def _clean_hook(text: str) -> str:
     """Tidy the artifacts a small model leaves on hook text.
 
@@ -187,7 +248,7 @@ def _parse_hooks(raw: dict, plan: ClipPlan) -> tuple[list[Hook], str]:
     for item in raw.get("hooks", []) or []:
         if not isinstance(item, dict):
             continue
-        text = _clean_hook(str(item.get("text", "")))
+        text = _clean_hook(strip_speaker_labels(str(item.get("text", ""))))
         category = str(item.get("category", "")).strip()
         category = next(
             (c for c in P.HOOK_CATEGORIES if c.lower() == category.lower()), ""
@@ -260,21 +321,29 @@ def _format_caption(raw: dict, plan: ClipPlan) -> str:
     headline banner, the side-taking question, the location rule and the exact
     hashtag count are guaranteed instead of hoped for.
     """
-    headline = str(raw.get("headline", "")).strip().strip('"').rstrip("!.")
+    headline = strip_speaker_labels(
+        str(raw.get("headline", "")).strip().strip('"').rstrip("!.")
+    )
+    # The model sometimes answers with a bare hashtag ("#FRAUDCONTROVERSY").
+    # Hashtags belong in the final line only, so unpack it into words instead.
+    headline = re.sub(
+        r"#(\w+)", lambda m: re.sub(r"(?<=[a-z])(?=[A-Z])", " ", m.group(1)), headline
+    ).strip()
     if not headline:
         headline = (plan.topic or "CONFRONTATION CAUGHT ON CAMERA").upper()
     headline = _EMOJI.sub("", headline).strip().upper()
 
     parts: list[str] = [f"🚨 {headline} 🚨", ""]
 
-    for key in ("trigger", "escalation", "debate"):
-        paragraph = str(raw.get(key, "")).strip()
+    for key in ("trigger", "escalation", "reaction", "debate"):
+        paragraph = _clean_paragraph(str(raw.get(key, "")))
         if paragraph:
             parts.extend([paragraph, ""])
 
     question = str(raw.get("question", "")).strip()
     if question:
         question = question.lstrip("👇").strip()
+        question = re.sub(r"\s*#\w+", "", question).strip()
         # The model often ends on an emoji. Check for the question mark against
         # the text with any trailing emoji removed, or we produce "...🤔?".
         without_emoji = _EMOJI.sub("", question).strip()
@@ -286,7 +355,11 @@ def _format_caption(raw: dict, plan: ClipPlan) -> str:
 
     # Only include a location the model was given evidence for.
     location = str(raw.get("location", "")).strip()
-    if location and location.lower() not in ("unknown", "n/a", "none", "null"):
+    if (
+        location
+        and location.lower() not in ("unknown", "n/a", "none", "null")
+        and _location_is_supported(location, plan.transcript)
+    ):
         parts.extend([f"📍 Geotag / Location: {location}", ""])
 
     tags = raw.get("hashtags") or []
@@ -323,6 +396,7 @@ def _build_caption(raw: dict, plan: ClipPlan) -> str:
                 re.split(r"(?<=[.!?])\s+", plan.transcript.strip())[:2]
             )[:400],
             "escalation": "",
+            "reaction": "",
             "debate": "",
             "question": "Who crossed the line",
             "location": "",
@@ -345,6 +419,14 @@ def generate_copy(
     visual_note = vision.description[:200] if vision and vision.description else ""
     opening = opening_line or " ".join(plan.transcript.split()[:14])
 
+    # Withhold the internal speaker tags: given "Speaker C" the model will
+    # faithfully write "Speaker C says...". It only needs to know how many
+    # distinct voices there are.
+    voices = len([s for s in plan.speakers if s])
+    speaker_hint = (
+        [f"{voices} different voices"] if voices > 1 else ["one speaker"]
+    )
+
     # One call for both. Hooks and the caption share every piece of context, so
     # splitting them doubled prompt prefill and request overhead for no benefit.
     raw: dict = {}
@@ -355,14 +437,14 @@ def generate_copy(
                 transcript=plan.transcript,
                 opening_line=opening,
                 topic=plan.topic,
-                speakers=plan.speakers,
+                speakers=speaker_hint,
                 duration=plan.duration,
                 conflict_note=conflict_note,
                 visual_note=visual_note,
             ),
             schema=P.COPY_SCHEMA,
             temperature=0.75,
-            max_tokens=1100,
+            max_tokens=1700,
         )
     except ProviderError as exc:
         log.warning("Copy generation failed for %s: %s", plan.name, exc)

@@ -113,6 +113,8 @@ class Settings(BaseSettings):
     render_workers: int = 3
     subtitle_font: str = "Arial"
     subtitle_font_size: int = 68
+    # Detect and crop away burned-in captions already present in the source.
+    remove_source_subtitles: bool = True
 
     # --- Attention / conflict scoring ---------------------------------------
     opening_window_seconds: float = 3.0

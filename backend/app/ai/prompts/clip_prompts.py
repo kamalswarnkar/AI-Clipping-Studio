@@ -264,42 +264,52 @@ PREFERRED_VERBS: tuple[str, ...] = (
 
 
 _CAPTION_RULES = """
-CAPTION -- you are also an expert viral Instagram Reels copywriter specialising in US street
-interviews, protests, public confrontations and contested public moments.
+CAPTION -- you are also an expert viral Instagram Reels copywriter for US street
+interviews, protests and public confrontations.
 
-You optimise for shares, comments, retention and audience debate.
+Write it as NARRATION, in the third person. Describe what happens. NEVER paste
+the transcript back as a paragraph, and never open with the raw quote.
 
-The highest-performing captions contain: a conflict trigger, a public
-confrontation, escalation, a side-taking opportunity, and an unresolved debate.
+NAMING PEOPLE
+- Use a real name ONLY if that exact name is spoken in the transcript.
+- Otherwise describe people by role: "the reporter", "a demonstrator",
+  "the official", "a woman in the crowd".
+- NEVER write "Speaker A", "Speaker B" or any similar label. Those are internal
+  audio-processing tags, not people.
 
-STRUCTURE (follow exactly, using flowing paragraphs -- do NOT print the words
-"Trigger", "Escalation" or "Debate" as labels):
+LENGTH: aim for 170-220 words across the four body paragraphs. Short paragraphs,
+but substantial ones -- one thin sentence per paragraph is far too little.
 
-🚨 [CONFLICT HEADLINE IN CAPS] 🚨
+The four body paragraphs, in order:
+1. trigger     - the exact moment that set the conflict off
+2. escalation  - how it escalated, who did what next
+3. reaction    - how the other side and any bystanders responded. END this
+                 paragraph with a line pushing the viewer to watch, such as
+                 "You have to watch the clip to see how fast this spiralled."
+4. debate      - why viewers are split. Use the shape:
+                 "Critics argue ... while others insist ..."
 
-Paragraph 1 - the exact moment that triggered the confrontation.
-Paragraph 2 - how it escalated and how people reacted.
-Paragraph 3 - why viewers are divided: "Critics argue... while others insist..."
+HASHTAGS: exactly 5, PascalCase, no spaces. Mix the topic, the event type and
+any place or person actually named -- e.g. #StreetInterview
+#PublicConfrontation #Sacramento #ViralVideo.
 
-👇 [A closed, side-taking question]
+Here is the standard to match (from a reference reel):
 
-📍 Geotag / Location: [City, State]
-
-#Tag1 #Tag2 #Tag3 #Tag4 #Tag5
-
-RULES
-- Focus on the conflict, not background or policy detail.
-- Do not sound like a news article. Short paragraphs.
-- Highlight unexpected reactions, tension, crowd dynamics, disagreement.
-- The final question must NOT be open-ended. Prefer forms like
-  "Was he right or wrong?", "Did the crowd overreact?", "Who crossed the line?"
-- Include the location line ONLY if the location is explicitly stated in the
-  transcript or clearly visible. Otherwise omit that line entirely. Never guess
-  a city.
-- Exactly 5 hashtags.
-- Output only the finished caption.
-
-{FACTUALITY_RULES}
+    HEADLINE: SIDEWALK STANDOFF ESCALATES AS STATE OFFICIAL CLAIMS THEFT ON CAMERA
+    TRIGGER: The confrontation turns hostile on the sidewalk when a state
+    official aggressively snatches papers, igniting a heated dispute over
+    personal property.
+    ESCALATION: Tension spikes instantly outside the Capitol as he loudly
+    accuses the reporter of committing a crime, repeatedly demanding his
+    property back.
+    REACTION: Instead of handing the papers back, the reporter holds them just
+    out of reach, taunting the official while displaying the stack of printed
+    insults. You have to watch the clip to see how fast this altercation
+    spiralled on camera.
+    DEBATE: This clash has divided social media. Critics argue a government
+    official had no business parading personal insults in public, while others
+    insist taking and holding someone else's property crossed a major line.
+    QUESTION: Who crossed the line?
 """.strip()
 
 
@@ -367,7 +377,7 @@ COPY_SCHEMA: dict[str, Any] = {
                 "type": "object",
                 "properties": {
                     "category": {"type": "string", "maxLength": 24},
-                    "text": {"type": "string", "maxLength": 90},
+                    "text": {"type": "string", "minLength": 12, "maxLength": 90},
                 },
                 "required": ["category", "text"],
             },
@@ -379,11 +389,12 @@ COPY_SCHEMA: dict[str, Any] = {
             "maxItems": 13,
             "items": {"type": "integer"},
         },
-        "headline": {"type": "string", "maxLength": 90},
-        "trigger": {"type": "string", "maxLength": 320},
-        "escalation": {"type": "string", "maxLength": 320},
-        "debate": {"type": "string", "maxLength": 320},
-        "question": {"type": "string", "maxLength": 90},
+        "headline": {"type": "string", "minLength": 25, "maxLength": 120},
+        "trigger": {"type": "string", "minLength": 150, "maxLength": 420},
+        "escalation": {"type": "string", "minLength": 150, "maxLength": 420},
+        "reaction": {"type": "string", "minLength": 150, "maxLength": 420},
+        "debate": {"type": "string", "minLength": 170, "maxLength": 460},
+        "question": {"type": "string", "minLength": 12, "maxLength": 90},
         "location": {"type": "string", "maxLength": 60},
         "hashtags": {
             "type": "array",
@@ -394,7 +405,7 @@ COPY_SCHEMA: dict[str, Any] = {
     },
     "required": [
         "hooks", "best_hook_index", "ranking",
-        "headline", "trigger", "escalation", "debate", "question",
+        "headline", "trigger", "escalation", "reaction", "debate", "question",
         "location", "hashtags",
     ],
 }
@@ -440,14 +451,24 @@ Write exactly {len(HOOK_CATEGORIES)} hooks, one per category, in this order:
 - best_hook_index: 0-based index of the strongest hook
 - ranking: all {len(HOOK_CATEGORIES)} indices (0-based), strongest first
 
-PART 2 - CAPTION
-- headline: breaking-news conflict headline IN CAPS, no emojis
-- trigger: ONE short paragraph on the moment that started the conflict
-- escalation: ONE short paragraph on how it escalated
-- debate: ONE short paragraph on why viewers are divided
+PART 2 - CAPTION (narrate in the third person; do NOT quote the transcript back)
+- headline: breaking-news conflict headline IN CAPS, 8-14 words, no emojis
+- trigger: paragraph on the exact moment that set the conflict off
+- escalation: paragraph on how it escalated and who did what next
+- reaction: paragraph on how others responded, ending with a line telling the
+  viewer they have to watch the clip
+- debate: paragraph on why viewers are split -- "Critics argue ... while others
+  insist ..."
 - question: a closed, side-taking question
 - location: "City, State" ONLY if stated in the transcript, else ""
-- hashtags: exactly 5, each starting with #
+- hashtags: exactly 5, PascalCase, each starting with #
+
+The four caption paragraphs together should total 170-220 words.
+Put hashtags ONLY in the hashtags field, never inside a paragraph.
+Use emoji ONLY in the headline and the question. Body paragraphs are plain
+prose -- do not pad them with emoji or repeated tags to reach a length.
+Refer to people by name only if the name is spoken in the transcript, otherwise
+by role. Never write "Speaker A"/"Speaker B".
 
 Everything must be supported by the transcript.
 Return COMPACT single-line JSON. Do not indent or pretty-print.

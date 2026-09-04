@@ -72,17 +72,17 @@ _TRIGGER_PATTERNS: dict[str, re.Pattern[str]] = {
         re.I,
     ),
     "confrontation": re.compile(
-        r"(don't touch|do not touch|get out|back off|shut up|let go|"
+        r"\b(don't touch|do not touch|get out|back off|shut up|let go|"
         r"give it back|you're lying|youre lying|that's a lie|thats a lie|"
         r"excuse me|hey hey|whoa|stop it|get off|get away from|"
         r"who do you think|how dare you|are you serious|"
-        r"call the police|i'm calling|im calling)",
+        r"call the police|i'm calling|im calling)\b",
         re.I,
     ),
     "challenge": re.compile(
-        r"(answer the question|why won't you|why wont you|prove it|"
+        r"\b(answer the question|why won't you|why wont you|prove it|"
         r"do you support|do you think|what about|explain to me|"
-        r"can you name|justify)",
+        r"can you name|justify)\b",
         re.I,
     ),
     "number": re.compile(

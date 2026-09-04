@@ -24,7 +24,7 @@ from ..analysis import scenes as scene_analysis
 from ..analysis import selection
 from ..analysis.audio_analysis import analyze_audio
 from ..analysis.boundaries import expand_for_context, refine_boundaries
-from ..analysis.visual import analyze_visuals
+from ..analysis.visual import analyze_visuals, detect_subtitle_band
 from ..config import get_settings
 from ..models.db import Candidate as CandidateRow
 from ..models.db import Clip, Job, Project, get_session
@@ -293,9 +293,20 @@ def _stage_visual_analysis(ctx: _Context, report: JobReporter) -> None:
         source_height=ctx.media.height if ctx.media else 0,
         progress=lambda f, m: report.progress(f, m),
     )
+    # Burned-in captions in the source must be found before rendering: the
+    # vertical crop would otherwise cut them in half and the app would burn its
+    # own captions on top of the remains.
+    if ctx.settings.remove_source_subtitles:
+        try:
+            ctx.visual.subtitle_band_top = detect_subtitle_band(ctx.source)
+        except Exception as exc:  # noqa: BLE001 - purely an enhancement
+            log.warning("Subtitle band detection failed: %s", exc)
+
     ctx.storage.write_json("visual", ctx.visual)
     with_faces = sum(1 for f in ctx.visual.frames if f.faces)
-    report.complete(f"{len(ctx.visual.frames)} frames, faces in {with_faces}")
+    band = ctx.visual.subtitle_band_top
+    extra = f", source captions from {band * 100:.0f}%" if band else ""
+    report.complete(f"{len(ctx.visual.frames)} frames, faces in {with_faces}{extra}")
 
 
 def _stage_candidates(ctx: _Context, report: JobReporter) -> None:
