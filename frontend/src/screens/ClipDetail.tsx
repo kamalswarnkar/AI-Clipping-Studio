@@ -1,43 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import type { Clip } from "../api/types";
-import { CopyButton, ErrorPanel, Spinner } from "../components/Common";
+import { ErrorPanel, Spinner } from "../components/Common";
 import { timecode } from "../lib/format";
-
-function HookRow({
-  hook,
-  onCopy,
-}: {
-  hook: { category: string; text: string; rank: number; is_best: boolean };
-  onCopy: () => void;
-}) {
-  return (
-    <li
-      className={`group flex items-start gap-3 rounded-md px-3 py-2.5 transition-colors hover:bg-ink-850 ${
-        hook.is_best ? "bg-accent/[0.07]" : ""
-      }`}
-    >
-      <span className="mt-0.5 w-5 shrink-0 text-right text-[11px] tabular-nums text-ink-600">
-        {hook.rank}
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="block text-sm leading-relaxed text-ink-100">
-          {hook.text}
-        </span>
-        <span className="mt-0.5 block text-[11px] uppercase tracking-wider text-ink-600">
-          {hook.category}
-          {hook.is_best && <span className="ml-2 text-accent">Best</span>}
-        </span>
-      </span>
-      <CopyButton
-        text={hook.text}
-        label="Copy"
-        className="btn-ghost shrink-0 px-2 py-1 text-xs opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
-        onCopied={onCopy}
-      />
-    </li>
-  );
-}
 
 function InfoRow({ label, value }: { label: string; value: string }) {
   return (
@@ -58,7 +23,7 @@ export default function ClipDetail({
   onBack: () => void;
 }) {
   const [clip, setClip] = useState<Clip | null>(null);
-  const [busy, setBusy] = useState<"copy" | "adjust" | null>(null);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>("");
   const [showAdjust, setShowAdjust] = useState(false);
   const [range, setRange] = useState({ start: 0, end: 0 });
@@ -74,20 +39,8 @@ export default function ClipDetail({
       .catch((err) => setError((err as Error).message));
   }, [projectId, clipId]);
 
-  const regenerate = async () => {
-    setBusy("copy");
-    setError("");
-    try {
-      setClip(await api.regenerateCopy(projectId, clipId));
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(null);
-    }
-  };
-
   const applyAdjust = async () => {
-    setBusy("adjust");
+    setBusy(true);
     setError("");
     try {
       const updated = await api.adjustClip(projectId, clipId, range.start, range.end);
@@ -99,7 +52,7 @@ export default function ClipDetail({
     } catch (err) {
       setError((err as Error).message);
     } finally {
-      setBusy(null);
+      setBusy(false);
     }
   };
 
@@ -115,10 +68,8 @@ export default function ClipDetail({
     );
   }
 
-  const ranked = [...clip.hooks].sort((a, b) => a.rank - b.rank);
-
   return (
-    <div className="mx-auto max-w-6xl px-6 py-10">
+    <div className="mx-auto max-w-5xl px-6 py-10">
       <button className="btn-ghost mb-6 -ml-2" onClick={onBack}>
         ← All clips
       </button>
@@ -200,16 +151,16 @@ export default function ClipDetail({
               </div>
               <button
                 className="btn-primary w-full"
-                disabled={busy === "adjust" || range.end <= range.start}
+                disabled={busy || range.end <= range.start}
                 onClick={applyAdjust}
               >
-                {busy === "adjust" ? "Re-rendering…" : "Apply and re-render"}
+                {busy ? "Re-rendering…" : "Apply and re-render"}
               </button>
             </div>
           )}
         </div>
 
-        {/* --- right: copy and metadata --- */}
+        {/* --- right: clip information --- */}
         <div className="min-w-0">
           <header className="mb-6">
             <h1 className="text-lg font-medium tracking-tight text-ink-50">
@@ -226,66 +177,6 @@ export default function ClipDetail({
             </p>
           )}
 
-          {/* best hook */}
-          {clip.best_hook && (
-            <section className="mb-6">
-              <div className="label mb-2">Best hook</div>
-              <div className="flex items-start gap-3 rounded-md border border-accent-dim/40 bg-accent/[0.07] px-4 py-3">
-                <p className="min-w-0 flex-1 text-[15px] leading-relaxed text-ink-50">
-                  {clip.best_hook}
-                </p>
-                <CopyButton
-                  text={clip.best_hook}
-                  className="btn-secondary shrink-0 px-2.5 py-1 text-xs"
-                  onCopied={() =>
-                    api.feedback(projectId, clip.id, "hook_selected", clip.best_hook)
-                  }
-                />
-              </div>
-            </section>
-          )}
-
-          {/* caption */}
-          <section className="mb-6">
-            <div className="mb-2 flex items-center justify-between">
-              <span className="label">Caption</span>
-              <CopyButton
-                text={clip.caption}
-                label="Copy caption"
-                className="btn-ghost px-2 py-1 text-xs"
-              />
-            </div>
-            <p className="panel px-4 py-3 text-sm leading-relaxed text-ink-200">
-              {clip.caption || "No caption generated."}
-            </p>
-          </section>
-
-          {/* hooks */}
-          <section className="mb-6">
-            <div className="mb-2 flex items-center justify-between">
-              <span className="label">All hooks ({ranked.length})</span>
-              <button
-                className="btn-ghost px-2 py-1 text-xs"
-                disabled={busy === "copy"}
-                onClick={regenerate}
-              >
-                {busy === "copy" ? "Regenerating…" : "Regenerate copy"}
-              </button>
-            </div>
-            <ul className="panel divide-y divide-ink-850 py-1">
-              {ranked.map((hook, i) => (
-                <HookRow
-                  key={i}
-                  hook={hook}
-                  onCopy={() =>
-                    api.feedback(projectId, clip.id, "hook_selected", hook.text)
-                  }
-                />
-              ))}
-            </ul>
-          </section>
-
-          {/* metadata */}
           <section>
             <div className="label mb-2">Clip information</div>
             <div className="panel divide-y divide-ink-850 px-4 py-2">
@@ -305,11 +196,11 @@ export default function ClipDetail({
               )}
             </div>
 
-            <details className="mt-3 group">
+            <details className="mt-3">
               <summary className="cursor-pointer list-none text-xs text-ink-500 hover:text-ink-300">
                 Transcript
               </summary>
-              <p className="panel mt-2 max-h-64 overflow-y-auto px-4 py-3 text-[13px] leading-relaxed text-ink-300">
+              <p className="panel mt-2 max-h-80 overflow-y-auto px-4 py-3 text-[13px] leading-relaxed text-ink-300">
                 {clip.transcript || "No transcript."}
               </p>
             </details>

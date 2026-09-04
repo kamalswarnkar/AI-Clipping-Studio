@@ -24,7 +24,6 @@ class JobType(str, Enum):
     LLM_EVALUATE = "LLM_EVALUATE"
     VALIDATE = "VALIDATE"
     RENDER = "RENDER"
-    GENERATE_COPY = "GENERATE_COPY"
     PACKAGE_EXPORT = "PACKAGE_EXPORT"
 
 
@@ -68,7 +67,6 @@ PIPELINE_ORDER: tuple[JobType, ...] = (
     JobType.GENERATE_CANDIDATES,
     JobType.LLM_EVALUATE,
     JobType.VALIDATE,
-    JobType.GENERATE_COPY,
     JobType.RENDER,
 )
 
@@ -84,7 +82,6 @@ JOB_LABELS: dict[JobType, str] = {
     JobType.GENERATE_CANDIDATES: "Finding moments",
     JobType.LLM_EVALUATE: "Evaluating moments",
     JobType.VALIDATE: "Validating context",
-    JobType.GENERATE_COPY: "Generating copy",
     JobType.RENDER: "Rendering clips",
     JobType.PACKAGE_EXPORT: "Packaging export",
 }

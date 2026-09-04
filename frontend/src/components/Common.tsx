@@ -4,7 +4,13 @@ import { copyText } from "../lib/format";
 
 export function Logo({ subtitle }: { subtitle?: string }) {
   return (
-    <div className="flex items-baseline gap-3">
+    <div className="flex items-center gap-3">
+      <img
+        src="/logo.png"
+        alt=""
+        aria-hidden
+        className="h-8 w-8 shrink-0 object-contain"
+      />
       <span className="text-[15px] font-semibold uppercase tracking-[0.2em] text-ink-100">
         Clipper
       </span>
@@ -12,6 +18,26 @@ export function Logo({ subtitle }: { subtitle?: string }) {
         <span className="text-[13px] text-ink-500">{subtitle}</span>
       )}
     </div>
+  );
+}
+
+/**
+ * Large logo parked in the empty space to the left of the centred column.
+ *
+ * Purely decorative, so it is hidden from assistive tech and only appears once
+ * the viewport is wide enough that the space is genuinely empty -- on smaller
+ * screens it would collide with the content.
+ */
+export function LogoWatermark() {
+  return (
+    <img
+      src="/logo.png"
+      alt=""
+      aria-hidden
+      className="pointer-events-none fixed left-[3vw] top-1/2 hidden
+                 w-[26vw] max-w-[420px] -translate-y-1/2 select-none
+                 object-contain opacity-90 xl:block"
+    />
   );
 }
 

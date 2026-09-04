@@ -12,7 +12,8 @@ Upload  →  Transcribe  →  Find moments  →  Validate  →  Render  →  Hoo
 ```
 
 For each selected moment the app produces a vertical 1080×1920 MP4 with burned-in
-captions, 13 ranked hook options, one finished caption, and a metadata file.
+subtitles, plus a metadata file describing where it came from and why it was
+chosen.
 
 ---
 
@@ -41,7 +42,6 @@ validated and clamped, and a deterministic renderer performs every cut.
 | `GENERATE_CANDIDATES` | 30–100 windows, multi-factor scored | cheap |
 | `LLM_EVALUATE` | LLM judgement, batched and run concurrently | **expensive** |
 | `VALIDATE` | context check, filler trim, dedupe, word-boundary snap | moderate |
-| `GENERATE_COPY` | 13 hooks + caption, fact-checked against the transcript | moderate |
 | `RENDER` | trim → drop source caption band → smart 9:16 crop → loudnorm → burn captions → H.264 | moderate |
 
 Only the strongest candidates reach the expensive stages. That staging is what
@@ -144,9 +144,7 @@ silently.
 ```
 <SourceVideoName>/
 ├── Clip_01/
-│   ├── Clip_01.mp4      vertical, captioned, loudness-normalised
-│   ├── Hooks.txt        BEST HOOK + 13 categorised hooks + ranking
-│   ├── Caption.txt      the finished caption, nothing else
+│   ├── Clip_01.mp4      vertical, subtitled, loudness-normalised
 │   └── Info.txt         source range, speakers, topic, transcript, analysis
 ├── Clip_02/
 └── ...
@@ -165,18 +163,11 @@ rather than left to the model:
   and expands the window when it did.
 - **Filler trimming** removes logistics and small-talk openings regardless of
   how the model scored them.
-- **Hooks and captions are fact-checked in code** against the clip transcript.
-  A hook citing a number or quote that was never said is rejected and replaced.
 - **Fewer clips is a valid answer.** If only 6 moments are strong, you get 6 and
   a message saying so. The app never pads the list to hit a requested count.
 - **Openings are protected.** A clip may not start mid-sentence or on a greeting,
   logistics or channel intro, because the first three seconds decide whether a
   short-form clip is watched at all.
-- **Internal speaker tags never reach a viewer.** Diarization knows there were
-  three distinct voices, not who they were, so "Speaker C" is withheld from the
-  copy prompt and stripped from output if it appears anyway.
-- **A geotag is only printed when the city is actually named in the clip.**
-  Matching the state alone would publish a city the video never mentions.
 
 For political or contested material the system transcribes, clips and describes
 faithfully. It does not do voter targeting, demographic persuasion, or
@@ -214,13 +205,11 @@ source producing **11 clips**:
 | Candidate generation | 7 s |
 | LLM evaluation (32 candidates) | 115 s |
 | Context validation (11 clips) | 31 s |
-| Copy generation (11 clips × 13 hooks + caption) | 197 s |
 | Rendering (11 clips) | 97 s |
-| **Total** | **≈ 9.2 min** |
+| **Total** | **≈ 6 min** |
 
-Copy generation is now the largest stage and scales linearly with clip count:
-each clip needs 13 hooks plus a full caption, and generation tokens are the
-bottleneck. Ask for fewer clips if you want it faster.
+LLM evaluation is the largest remaining stage. Lower `CANDIDATE_LLM_MAX` to
+trade some selection quality for speed.
 
 If you enable `VISION_ENABLED=true`, expect roughly +25 s per analysed
 candidate. The text model (4.7 GB) and vision model (6 GB) do not both fit in

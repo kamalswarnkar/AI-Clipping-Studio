@@ -1,8 +1,8 @@
-"""Export writers: the Clip_NN folder structure, Hooks.txt, Caption.txt, Info.txt.
+"""Export writers: the Clip_NN folder structure and Info.txt.
 
 The exact layout is a product requirement (Architecture.md section 20), so the
 formatting here is intentionally literal rather than clever. Every clip folder is
-self-contained: video, hooks, caption and metadata together.
+self-contained: the rendered video plus its metadata.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import zipfile
 from pathlib import Path
 from typing import Iterable, Optional
 
-from ..models.domain import ClipCopy, ClipPlan
+from ..models.domain import ClipPlan
 from ..services.storage import safe_stem
 
 log = logging.getLogger(__name__)
@@ -27,30 +27,6 @@ def format_timecode(seconds: float) -> str:
     minutes = int((seconds % 3600) // 60)
     secs = int(seconds % 60)
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
-
-
-def render_hooks_txt(copy: ClipCopy) -> str:
-    """Render Hooks.txt in the required layout."""
-    lines: list[str] = ["🏆 BEST HOOK", ""]
-    lines.append(copy.best_hook or "(none generated)")
-    lines.extend(["", ""])
-
-    for i, hook in enumerate(copy.hooks, start=1):
-        lines.append(f"{i}. {hook.category}")
-        lines.append(hook.text)
-        lines.extend(["", ""])
-
-    lines.append("RANKING")
-    lines.append("")
-    for hook in copy.ranked_hooks:
-        lines.append(f"{hook.rank}. {hook.text}")
-
-    return "\n".join(lines).rstrip() + "\n"
-
-
-def render_caption_txt(copy: ClipCopy) -> str:
-    """Caption.txt holds only the caption, ready to copy and paste."""
-    return (copy.caption or "").strip() + "\n"
 
 
 def render_info_txt(
@@ -111,7 +87,6 @@ def write_clip_folder(
     *,
     root: Path,
     plan: ClipPlan,
-    copy: ClipCopy,
     video_path: Optional[Path],
     source_filename: str,
     crop_strategy: str = "",
@@ -126,14 +101,11 @@ def write_clip_folder(
     else:
         log.warning("No rendered video for %s; folder will lack the MP4", plan.name)
 
-    (folder / "Hooks.txt").write_text(render_hooks_txt(copy), encoding="utf-8")
-    (folder / "Caption.txt").write_text(render_caption_txt(copy), encoding="utf-8")
     (folder / "Info.txt").write_text(
         render_info_txt(
             plan,
             source_filename=source_filename,
             crop_strategy=crop_strategy,
-            generated_by=copy.generated_by,
             warnings=warnings,
         ),
         encoding="utf-8",
@@ -145,7 +117,7 @@ def build_export_tree(
     *,
     export_root: Path,
     source_filename: str,
-    items: Iterable[tuple[ClipPlan, ClipCopy, Optional[Path], str]],
+    items: Iterable[tuple[ClipPlan, Optional[Path], str]],
     project_warnings: Optional[list[str]] = None,
 ) -> Path:
     """Build <SourceVideoName>/Clip_NN/... under the export root."""
@@ -153,11 +125,10 @@ def build_export_tree(
     root.mkdir(parents=True, exist_ok=True)
 
     count = 0
-    for plan, copy, video_path, crop_strategy in items:
+    for plan, video_path, crop_strategy in items:
         write_clip_folder(
             root=root,
             plan=plan,
-            copy=copy,
             video_path=video_path,
             source_filename=source_filename,
             crop_strategy=crop_strategy,

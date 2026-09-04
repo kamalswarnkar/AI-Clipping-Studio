@@ -15,7 +15,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable, Optional
 
-from ..ai import copy as copy_gen
 from ..ai import evaluation
 from ..ai.registry import get_providers
 from ..ai.vision import analyzer as vision_analyzer
@@ -31,7 +30,6 @@ from ..models.db import Clip, Job, Project, get_session
 from ..models.domain import (
     AudioAnalysis,
     Candidate,
-    ClipCopy,
     ClipPlan,
     Diarization,
     MediaInfo,
@@ -126,7 +124,6 @@ class _Context:
         self.visual: Optional[VisualAnalysis] = None
         self.candidates: list[Candidate] = []
         self.plans: list[ClipPlan] = []
-        self.copies: dict[str, ClipCopy] = {}
         self.crop_strategies: dict[str, str] = {}
         self.selection_notes: list[str] = []
 
@@ -603,73 +600,6 @@ def _stage_validate(ctx: _Context, report: JobReporter) -> None:
     report.complete(f"{len(plans)} clips selected")
 
 
-def _stage_generate_copy(ctx: _Context, report: JobReporter) -> None:
-    report.start("Generating hooks and captions")
-    providers = get_providers()
-
-    llm_ok, reason = providers.llm.is_available()
-    if not llm_ok:
-        # Still produce transcript-derived copy so no clip ships empty.
-        for plan in ctx.plans:
-            ctx.copies[plan.id] = copy_gen.generate_copy(
-                plan, llm=providers.llm, vision=None
-            )
-        report.skip(reason)
-        return
-
-    vision_by_candidate = {
-        c.id: c.vision for c in ctx.candidates if c.vision is not None
-    }
-    notes_by_candidate = {c.id: c.conflict_note for c in ctx.candidates}
-
-    def one(plan: ClipPlan) -> tuple[str, ClipCopy]:
-        opening = (
-            ctx.transcript.text_in_window(plan.start, plan.start + 3.0)
-            if ctx.transcript
-            else ""
-        )
-        return plan.id, copy_gen.generate_copy(
-            plan,
-            llm=providers.llm,
-            vision=vision_by_candidate.get(plan.source_candidate_id),
-            conflict_note=notes_by_candidate.get(plan.source_candidate_id, ""),
-            opening_line=opening,
-        )
-
-    # Clips are independent, so generate copy concurrently.
-    done = 0
-    workers = max(1, min(ctx.settings.llm_parallel, len(ctx.plans)))
-    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="copy") as pool:
-        futures = [pool.submit(one, plan) for plan in ctx.plans]
-        for future in as_completed(futures):
-            queue.raise_if_cancelled(ctx.project_id)
-            try:
-                plan_id, copy = future.result()
-                ctx.copies[plan_id] = copy
-            except Exception as exc:  # noqa: BLE001 - one clip must not kill the stage
-                log.warning("Copy generation failed for a clip: %s", exc)
-            done += 1
-            report.progress(done / len(ctx.plans), f"{done}/{len(ctx.plans)} clips")
-
-    with get_session() as session:
-        clips = {
-            c.index: c
-            for c in session.query(Clip).filter(Clip.project_id == ctx.project_id).all()
-        }
-        for plan in ctx.plans:
-            clip = clips.get(plan.index)
-            copy = ctx.copies.get(plan.id)
-            if clip is None or copy is None:
-                continue
-            clip.hooks = [h.model_dump() for h in copy.hooks]
-            clip.best_hook = copy.best_hook
-            clip.caption = copy.caption
-            clip.copy_generated_by = copy.generated_by
-        session.commit()
-
-    report.complete(f"Copy for {len(ctx.copies)} clips")
-
-
 def _render_one(
     ctx: _Context, plan: ClipPlan
 ) -> tuple[ClipPlan, Optional[Exception], Optional[str]]:
@@ -773,7 +703,6 @@ STAGE_FUNCTIONS: dict[JobType, Callable[[_Context, JobReporter], None]] = {
     JobType.GENERATE_CANDIDATES: _stage_candidates,
     JobType.LLM_EVALUATE: _stage_llm_evaluate,
     JobType.VALIDATE: _stage_validate,
-    JobType.GENERATE_COPY: _stage_generate_copy,
     JobType.RENDER: _stage_render,
 }
 

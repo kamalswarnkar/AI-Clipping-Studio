@@ -202,10 +202,6 @@ class Clip(Base, JSONMixin):
 
     speakers_json: Mapped[Optional[str]] = mapped_column(Text, default=None)
     breakdown_json: Mapped[Optional[str]] = mapped_column(Text, default=None)
-    hooks_json: Mapped[Optional[str]] = mapped_column(Text, default=None)
-    best_hook: Mapped[str] = mapped_column(Text, default="")
-    caption: Mapped[str] = mapped_column(Text, default="")
-    copy_generated_by: Mapped[str] = mapped_column(String(64), default="")
 
     render_status: Mapped[str] = mapped_column(
         String(24), default=RenderStatus.PENDING.value
@@ -231,14 +227,6 @@ class Clip(Base, JSONMixin):
     @speakers.setter
     def speakers(self, value: list[str]) -> None:
         self.speakers_json = self._dump(value)
-
-    @property
-    def hooks(self) -> list[dict[str, Any]]:
-        return self._load(self.hooks_json, [])
-
-    @hooks.setter
-    def hooks(self, value: list[dict[str, Any]]) -> None:
-        self.hooks_json = self._dump(value)
 
     @property
     def breakdown(self) -> dict[str, float]:

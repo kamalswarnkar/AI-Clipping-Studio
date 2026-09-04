@@ -30,10 +30,8 @@ from app.jobs.states import ProjectStatus  # noqa: E402
 from app.main import configure_logging  # noqa: E402
 from app.models.db import Project, get_session, init_db  # noqa: E402
 from app.models.domain import (  # noqa: E402
-    ClipCopy,
     ClipPlan,
     ContextDependency,
-    Hook,
     ScoreBreakdown,
 )
 from app.models.schemas import ProjectSettings  # noqa: E402
@@ -126,8 +124,6 @@ def main() -> int:
                 f"({clip.duration:5.1f}s) {clip.render_status:9s} {size:8s} "
                 f"score={clip.score:.2f} | {clip.topic[:38]}"
             )
-            if clip.best_hook:
-                print(f"      BEST HOOK: {clip.best_hook}")
             if clip.render_error:
                 print(f"      RENDER ERROR: {clip.render_error[:90]}")
 
@@ -143,13 +139,8 @@ def main() -> int:
                     context_dependency=ContextDependency(clip.context_dependency or "low"),
                     breakdown=ScoreBreakdown(**(clip.breakdown or {})),
                 )
-                copy = ClipCopy(
-                    hooks=[Hook(**h) for h in clip.hooks],
-                    best_hook=clip.best_hook or "", caption=clip.caption or "",
-                    generated_by=clip.copy_generated_by or "",
-                )
                 video = Path(clip.video_path) if clip.video_path else None
-                items.append((plan, copy, video if video and video.exists() else None, ""))
+                items.append((plan, video if video and video.exists() else None, ""))
 
             root = build_export_tree(
                 export_root=storage.export_dir,

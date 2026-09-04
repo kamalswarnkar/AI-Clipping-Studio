@@ -67,13 +67,6 @@ class JobResponse(BaseModel):
         )
 
 
-class HookResponse(BaseModel):
-    category: str
-    text: str
-    rank: int = 0
-    is_best: bool = False
-
-
 class ClipResponse(BaseModel):
     id: str
     index: int
@@ -88,9 +81,6 @@ class ClipResponse(BaseModel):
     context_dependency: str = "low"
     score: float = 0.0
     speakers: list[str] = Field(default_factory=list)
-    hooks: list[HookResponse] = Field(default_factory=list)
-    best_hook: str = ""
-    caption: str = ""
     render_status: str = "pending"
     render_error: Optional[str] = None
     has_video: bool = False
@@ -115,9 +105,6 @@ class ClipResponse(BaseModel):
             context_dependency=row.context_dependency or "low",
             score=round(row.score, 4),
             speakers=row.speakers,
-            hooks=[HookResponse(**h) for h in row.hooks],
-            best_hook=row.best_hook or "",
-            caption=row.caption or "",
             render_status=row.render_status,
             render_error=row.render_error,
             has_video=bool(row.video_path and Path(row.video_path).exists()),

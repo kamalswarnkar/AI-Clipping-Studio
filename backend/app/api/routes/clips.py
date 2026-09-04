@@ -8,8 +8,6 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import FileResponse
 
-from ...ai import copy as copy_gen
-from ...ai.registry import get_providers
 from ...analysis.boundaries import refine_boundaries
 from ...models.db import Clip, Feedback, Project, get_session
 from ...models.domain import (
@@ -129,35 +127,6 @@ def download_clip(project_id: str, clip_id: str):  # noqa: ANN201
         headers={"Content-Disposition": f'attachment; filename="{name}.mp4"'},
     )
 
-
-@router.post("/{clip_id}/regenerate-copy", response_model=ClipResponse)
-def regenerate_copy(project_id: str, clip_id: str) -> ClipResponse:
-    """Re-run hook and caption generation for one clip."""
-    providers = get_providers()
-    available, reason = providers.llm.is_available()
-    if not available:
-        raise HTTPException(status_code=503, detail=reason)
-
-    with get_session() as session:
-        clip = _get_clip(session, project_id, clip_id)
-        plan = _plan_from_clip(clip)
-        previous = clip.best_hook
-
-    copy = copy_gen.generate_copy(plan, llm=providers.llm)
-
-    with get_session() as session:
-        clip = _get_clip(session, project_id, clip_id)
-        clip.hooks = [h.model_dump() for h in copy.hooks]
-        clip.best_hook = copy.best_hook
-        clip.caption = copy.caption
-        clip.copy_generated_by = copy.generated_by
-        session.commit()
-        result = ClipResponse.from_row(clip)
-
-    _record_feedback(
-        project_id, clip_id, "copy_regenerated", {"previous_best_hook": previous}
-    )
-    return result
 
 
 @router.post("/{clip_id}/adjust", response_model=ClipResponse)
@@ -288,9 +257,6 @@ def submit_feedback(
 ) -> Response:
     """Record hook selection / rejection signals from the UI."""
     allowed = {
-        "hook_selected",
-        "hook_rejected",
-        "caption_edited",
         "clip_selected",
         "clip_rejected",
     }

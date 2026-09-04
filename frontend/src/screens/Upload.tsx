@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, api } from "../api/client";
 import type { Health, ProjectSettings } from "../api/types";
-import { ErrorPanel, Logo, ProgressBar, Spinner } from "../components/Common";
+import {
+  ErrorPanel,
+  Logo,
+  LogoWatermark,
+  ProgressBar,
+  Spinner,
+} from "../components/Common";
 import { fileSize } from "../lib/format";
 
 const ACCEPTED = [".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi"];
@@ -143,6 +149,8 @@ export default function Upload({
 
   return (
     <div className="mx-auto flex min-h-screen max-w-2xl flex-col justify-center px-6 py-16">
+      <LogoWatermark />
+
       <header className="mb-12">
         <Logo />
         <h1 className="mt-6 text-2xl font-medium tracking-tight text-ink-50">

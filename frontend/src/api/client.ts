@@ -132,11 +132,6 @@ export const api = {
   getClip: (projectId: string, clipId: string) =>
     request<Clip>(`/projects/${projectId}/clips/${clipId}`),
 
-  regenerateCopy: (projectId: string, clipId: string) =>
-    request<Clip>(`/projects/${projectId}/clips/${clipId}/regenerate-copy`, {
-      method: "POST",
-    }),
-
   adjustClip: (projectId: string, clipId: string, start: number, end: number) =>
     request<Clip>(`/projects/${projectId}/clips/${clipId}/adjust`, {
       method: "POST",

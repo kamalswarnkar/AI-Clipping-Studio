@@ -80,7 +80,7 @@ function ClipCard({
 
       <div className="mt-2 px-0.5">
         <p className="truncate text-[13px] text-ink-300">
-          {clip.topic || clip.best_hook || "Untitled moment"}
+          {clip.topic || "Untitled moment"}
         </p>
         <p className="mt-0.5 text-[11px] tabular-nums text-ink-600">
           {timecode(clip.start)} – {timecode(clip.end)}

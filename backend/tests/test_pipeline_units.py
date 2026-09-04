@@ -1,7 +1,7 @@
 """Unit tests for the deterministic pieces of the pipeline.
 
 These cover the logic that must be correct regardless of what any model says:
-boundary snapping, duplicate detection, factuality checking, subtitle timing,
+boundary snapping, duplicate detection, subtitle timing,
 crop expressions and path safety.
 """
 
@@ -14,7 +14,6 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.ai.copy import check_factuality  # noqa: E402
 from app.analysis.boundaries import (  # noqa: E402
     is_mid_word,
     refine_boundaries,
@@ -228,70 +227,6 @@ def test_distinct_clips_are_not_duplicates() -> None:
     b = _plan(2, 200, 230, "hiring senior engineers requires a different interview loop")
     same, _ = is_duplicate(a, b, iou_threshold=0.35, text_threshold=0.72)
     assert not same
-
-
-# ---------------------------------------------------------------------------
-# Factuality
-# ---------------------------------------------------------------------------
-
-TRANSCRIPT = (
-    "We cut our support tickets by 60 percent without hiring a single person. "
-    "Ninety one percent of those people never came back."
-)
-
-
-def test_factuality_accepts_supported_numbers() -> None:
-    ok, _ = check_factuality("They cut support tickets by 60%", TRANSCRIPT)
-    assert ok
-
-
-def test_factuality_accepts_spelled_out_numbers() -> None:
-    ok, _ = check_factuality("91% never returned", TRANSCRIPT)
-    assert ok
-
-
-def test_factuality_rejects_invented_number() -> None:
-    ok, why = check_factuality("They cut support tickets by 85%", TRANSCRIPT)
-    assert not ok and "85" in why
-
-
-def test_factuality_rejects_invented_quote() -> None:
-    ok, why = check_factuality('He said "we fired the whole team"', TRANSCRIPT)
-    assert not ok and "quote" in why.lower()
-
-
-def test_factuality_accepts_real_quote() -> None:
-    ok, _ = check_factuality('He said "without hiring a single person"', TRANSCRIPT)
-    assert ok
-
-
-def test_factuality_rejects_single_quoted_misquote() -> None:
-    """A paraphrase presented as a quote is still a misquote."""
-    real = (
-        "Most companies stay in acquisition mode long after they should have switched."
-    )
-    ok, why = check_factuality(
-        "'Most companies stay in acquisition mode too long.'", real
-    )
-    assert not ok and "quote" in why.lower()
-
-
-def test_factuality_accepts_single_quoted_real_quote() -> None:
-    real = "Most companies stay in acquisition mode long after they should have switched."
-    ok, _ = check_factuality("'stay in acquisition mode long after'", real)
-    assert ok
-
-
-def test_factuality_ignores_apostrophes_in_contractions() -> None:
-    """Contractions must not be parsed as quote delimiters."""
-    real = "It doesn't matter and we won't pretend it does for the audience."
-    ok, why = check_factuality("It doesn't matter and we won't pretend", real)
-    assert ok, why
-
-
-def test_factuality_rejects_empty() -> None:
-    ok, _ = check_factuality("   ", TRANSCRIPT)
-    assert not ok
 
 
 # ---------------------------------------------------------------------------
@@ -527,58 +462,6 @@ def test_opening_punch_prefers_confrontation() -> None:
     assert hot_score > calm_score
 
 
-def test_hook_quality_rejects_banned_phrases() -> None:
-    from app.ai.copy import check_hook_quality
-
-    assert not check_hook_quality("You won't believe what happened")[0]
-    assert not check_hook_quality("Things got heated at the rally")[0]
-    assert check_hook_quality("🚨 He grabbed the papers and walked away")[0]
-
-
-def test_clean_hook_strips_model_artifacts() -> None:
-    from app.ai.copy import _clean_hook
-
-    assert _clean_hook("/Area Tensions Erupt") == "Area Tensions Erupt"
-    assert _clean_hook('Why defend it? #FreeSpeech #Debate') == "Why defend it?"
-    assert _clean_hook('  "He walked away"  ') == "He walked away"
-
-
-# ---------------------------------------------------------------------------
-# Copy hygiene
-# ---------------------------------------------------------------------------
-
-def test_strip_speaker_labels_rewrites_diarization_tags() -> None:
-    """Internal Speaker A/B/C tags must never reach a viewer."""
-    from app.ai.copy import strip_speaker_labels
-
-    assert "Speaker C" not in strip_speaker_labels("Speaker C says the bill is bad.")
-    assert strip_speaker_labels(
-        "The clash between Speaker A and Speaker B escalated."
-    ) == "The clash between two people escalated."
-
-
-def test_strip_speaker_labels_leaves_real_words_alone() -> None:
-    """The trailing word boundary stops 'Speaker Demands' becoming 'speakeremands'."""
-    from app.ai.copy import strip_speaker_labels
-
-    assert strip_speaker_labels("Speaker Demands attention now.") == (
-        "Speaker Demands attention now."
-    )
-    assert strip_speaker_labels("A speaker demanded answers.") == (
-        "A speaker demanded answers."
-    )
-
-
-def test_caption_schema_forbids_empty_paragraphs() -> None:
-    """Empty strings satisfied the old schema, collapsing captions to one line."""
-    from app.ai.prompts.clip_prompts import COPY_SCHEMA
-
-    props = COPY_SCHEMA["properties"]
-    for field in ("trigger", "escalation", "reaction", "debate"):
-        assert props[field]["minLength"] >= 150, field
-    assert COPY_SCHEMA["properties"]["hooks"]["minItems"] == 13
-
-
 def test_confrontation_triggers_match() -> None:
     """These patterns were silently dead after heredoc damage ate the \b escapes."""
     from app.analysis.candidates import _TRIGGER_PATTERNS
@@ -588,42 +471,3 @@ def test_confrontation_triggers_match() -> None:
     assert not _TRIGGER_PATTERNS["confrontation"].search("We reviewed the budget.")
 
 
-def test_caption_headline_never_a_hashtag() -> None:
-    """A bare hashtag headline is unpacked into words, not printed raw."""
-    from app.ai.copy import _format_caption
-
-    plan = ClipPlan(id="x", index=1, start=0, end=20, transcript="some words here")
-    out = _format_caption(
-        {
-            "headline": "#IllegalImmigrationControversy",
-            "trigger": "t" * 40, "escalation": "e" * 40,
-            "reaction": "r" * 40, "debate": "d" * 40,
-            "question": "Who is right? #Debate",
-            "location": "", "hashtags": ["#a", "#b", "#c", "#d", "#e"],
-        },
-        plan,
-    )
-    headline = out.splitlines()[0]
-    assert "#" not in headline
-    assert "ILLEGAL IMMIGRATION CONTROVERSY" in headline
-
-    question = next(l for l in out.splitlines() if l.startswith("👇"))
-    assert "#" not in question
-
-
-def test_geotag_requires_the_city_to_be_spoken() -> None:
-    """A state match must not smuggle in a city the clip never named."""
-    from app.ai.copy import _location_is_supported
-
-    assert _location_is_supported("Sacramento, CA", "we are here in Sacramento today")
-    assert not _location_is_supported("Sacramento, CA", "here in California somewhere")
-    assert not _location_is_supported("", "anything")
-
-
-def test_clean_paragraph_removes_padding() -> None:
-    """Length floors make small models pad with tags and emoji."""
-    from app.ai.copy import _clean_paragraph
-
-    assert _clean_paragraph("The clash escalated. 🤬 #Fraud #Viral 🤙") == (
-        "The clash escalated."
-    )

@@ -333,23 +333,6 @@ class RenderStatus(str, Enum):
     FAILED = "failed"
 
 
-class Hook(BaseModel):
-    category: str
-    text: str
-    rank: int = 0
-    is_best: bool = False
-
-
-class ClipCopy(BaseModel):
-    hooks: list[Hook] = Field(default_factory=list)
-    best_hook: str = ""
-    caption: str = ""
-    generated_by: str = ""
-
-    @property
-    def ranked_hooks(self) -> list[Hook]:
-        return sorted(self.hooks, key=lambda h: h.rank)
-
 
 class ClipPlan(BaseModel):
     """A validated, deduplicated clip ready for rendering."""

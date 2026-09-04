@@ -66,13 +66,6 @@ export interface ProjectStatus {
   clips_total: number;
 }
 
-export interface Hook {
-  category: string;
-  text: string;
-  rank: number;
-  is_best: boolean;
-}
-
 export interface Clip {
   id: string;
   index: number;
@@ -87,9 +80,6 @@ export interface Clip {
   context_dependency: string;
   score: number;
   speakers: string[];
-  hooks: Hook[];
-  best_hook: string;
-  caption: string;
   render_status: "pending" | "rendering" | "completed" | "failed";
   render_error: string | null;
   has_video: boolean;

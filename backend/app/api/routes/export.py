@@ -11,10 +11,8 @@ from fastapi.responses import FileResponse
 from ...exporters.files import build_export_tree, zip_directory
 from ...models.db import Clip, Project, get_session
 from ...models.domain import (
-    ClipCopy,
     ClipPlan,
     ContextDependency,
-    Hook,
     RenderStatus,
     ScoreBreakdown,
 )
@@ -59,16 +57,10 @@ def _build(project_id: str, clip_ids: list[str] | None) -> tuple[Path, int, str]
                 context_dependency=ContextDependency(clip.context_dependency or "low"),
                 breakdown=ScoreBreakdown(**(clip.breakdown or {})),
             )
-            copy = ClipCopy(
-                hooks=[Hook(**h) for h in clip.hooks],
-                best_hook=clip.best_hook or "",
-                caption=clip.caption or "",
-                generated_by=clip.copy_generated_by or "",
-            )
             video = Path(clip.video_path) if clip.video_path else None
             if video is not None and not video.exists():
                 video = None
-            items.append((plan, copy, video, ""))
+            items.append((plan, video, ""))
 
     storage = ProjectStorage(project_id)
     root = build_export_tree(
