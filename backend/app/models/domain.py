@@ -199,6 +199,9 @@ class FrameAnalysis(BaseModel):
     motion: float = 0.0
     brightness: float = 0.0
     sharpness: float = 0.0
+    # Density of outlined-glyph pixels low in the frame: high while the source
+    # is showing captions of its own.
+    caption_score: float = 0.0
 
 
 class VisualAnalysis(BaseModel):
@@ -210,6 +213,13 @@ class VisualAnalysis(BaseModel):
     # None when the source has none. The renderer crops this band away so the
     # 9:16 conversion does not slice someone else's captions in half.
     subtitle_band_top: Optional[float] = None
+    # (start, end) windows in source time where the source is showing its own
+    # captions. Burned-in captions usually come and go rather than running the
+    # whole video, so this is a schedule, not a flag.
+    subtitle_spans: list[tuple[float, float]] = Field(default_factory=list)
+
+    def source_captions_at(self, t: float) -> bool:
+        return any(start <= t <= end for start, end in self.subtitle_spans)
 
     def frames_between(self, start: float, end: float) -> list[FrameAnalysis]:
         return [f for f in self.frames if start <= f.t <= end]

@@ -16,9 +16,10 @@ const DEFAULTS: ProjectSettings = {
   clip_count: 15,
   min_duration: 10,
   max_duration: 60,
-  vertical: true,
+  vertical: false,
   captions: true,
   smart_reframe: true,
+  vocabulary: "",
 };
 
 function NumberField({
@@ -239,10 +240,35 @@ export default function Upload({
             onChange={(v) => setSettings({ ...settings, max_duration: v })}
           />
         </div>
+        <div className="pt-4">
+          <label
+            htmlFor="vocabulary"
+            className="block text-[13px] text-ink-300"
+          >
+            Names and terms in this video
+          </label>
+          <p className="mt-1 text-[11px] leading-relaxed text-ink-500">
+            Optional. People, places or titles the transcriber is unlikely to
+            know, separated by commas. Speech recognition is biased toward
+            these, which is the one reliable fix for unusual proper nouns.
+          </p>
+          <textarea
+            id="vocabulary"
+            rows={2}
+            value={settings.vocabulary}
+            onChange={(e) =>
+              setSettings({ ...settings, vocabulary: e.target.value })
+            }
+            placeholder="Nick Shirley, Stop Nick Shirley Act, Gavin Newsom"
+            maxLength={1000}
+            className="mt-2 w-full resize-y rounded-md border border-ink-800 bg-ink-900 px-3 py-2 text-[13px] text-ink-100 placeholder:text-ink-600 focus:border-ink-600 focus:outline-none"
+          />
+        </div>
+
         <div className="pt-2">
           <Toggle
-            label="Vertical 9:16"
-            hint="Convert to 1080x1920 for short-form platforms"
+            label="Crop to vertical 9:16"
+            hint="Off keeps the original shape. On crops to 1080x1920 for short-form platforms, which drops whatever falls outside the tall frame."
             checked={settings.vertical}
             onChange={(v) => setSettings({ ...settings, vertical: v })}
           />
@@ -252,12 +278,15 @@ export default function Upload({
             checked={settings.captions}
             onChange={(v) => setSettings({ ...settings, captions: v })}
           />
-          <Toggle
-            label="Smart reframing"
-            hint="Track faces so speakers stay in frame when cropping"
-            checked={settings.smart_reframe}
-            onChange={(v) => setSettings({ ...settings, smart_reframe: v })}
-          />
+          {/* Only meaningful while something is being cropped. */}
+          {settings.vertical && (
+            <Toggle
+              label="Smart reframing"
+              hint="Track faces so speakers stay in frame when cropping"
+              checked={settings.smart_reframe}
+              onChange={(v) => setSettings({ ...settings, smart_reframe: v })}
+            />
+          )}
         </div>
       </div>
 

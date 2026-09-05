@@ -42,6 +42,7 @@ class FasterWhisperProvider:
         self.cpu_threads = s.whisper_cpu_threads
         self.vad_filter = s.whisper_vad_filter
         self.configured_language = s.whisper_language or None
+        self.configured_vocabulary = s.whisper_vocabulary or ""
 
     # --- availability -------------------------------------------------------
     def is_available(self) -> tuple[bool, str]:
@@ -86,12 +87,24 @@ class FasterWhisperProvider:
         audio_path: Path,
         *,
         language: Optional[str] = None,
+        vocabulary: str = "",
         progress: Optional[Callable[[float, str], None]] = None,
     ) -> Transcript:
         if not audio_path.exists():
             raise ProviderError(
                 f"Audio file missing: {audio_path.name}", provider=self.name
             )
+
+        # Names the model has no reason to know are the one thing a bigger
+        # model does not reliably fix. Biasing the decoder toward them does,
+        # and costs nothing.
+        hotwords = ", ".join(
+            part
+            for part in (self.configured_vocabulary.strip(), vocabulary.strip())
+            if part
+        ) or None
+        if hotwords:
+            log.info("Transcribing with vocabulary: %s", hotwords)
 
         model = self._load()
         try:
@@ -103,6 +116,7 @@ class FasterWhisperProvider:
                 vad_filter=self.vad_filter,
                 vad_parameters={"min_silence_duration_ms": 400},
                 condition_on_previous_text=False,
+                hotwords=hotwords,
             )
         except Exception as exc:  # noqa: BLE001
             raise ProviderError(

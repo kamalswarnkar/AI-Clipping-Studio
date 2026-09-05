@@ -39,7 +39,6 @@ def _build(project_id: str, clip_ids: list[str] | None) -> tuple[Path, int, str]
             raise HTTPException(status_code=404, detail="No clips to export.")
 
         source_filename = project.source_filename or "video.mp4"
-        warnings = [w.get("message", "") for w in project.warnings]
 
         items = []
         for clip in clips:
@@ -60,14 +59,13 @@ def _build(project_id: str, clip_ids: list[str] | None) -> tuple[Path, int, str]
             video = Path(clip.video_path) if clip.video_path else None
             if video is not None and not video.exists():
                 video = None
-            items.append((plan, video, ""))
+            items.append((plan, video))
 
     storage = ProjectStorage(project_id)
     root = build_export_tree(
         export_root=storage.export_dir,
         source_filename=source_filename,
         items=items,
-        project_warnings=warnings,
     )
     zip_path = zip_directory(root, storage.zip_path(source_filename))
     return zip_path, len(items), source_filename

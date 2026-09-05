@@ -56,9 +56,10 @@ async def upload_video(
     clip_count: int = Form(default=15),
     min_duration: float = Form(default=10.0),
     max_duration: float = Form(default=60.0),
-    vertical: bool = Form(default=True),
+    vertical: bool = Form(default=False),
     captions: bool = Form(default=True),
     smart_reframe: bool = Form(default=True),
+    vocabulary: str = Form(default=""),
 ) -> ProjectResponse:
     """Store the source video and the processing options."""
     filename = sanitize_filename(file.filename or "video.mp4")
@@ -81,6 +82,7 @@ async def upload_video(
             vertical=vertical,
             captions=captions,
             smart_reframe=smart_reframe,
+            vocabulary=vocabulary,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

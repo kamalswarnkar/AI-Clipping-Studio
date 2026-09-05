@@ -195,7 +195,7 @@ def adjust_clip(
 
     options = RenderOptions.from_settings(
         {
-            "vertical": settings.get("vertical", True),
+            "vertical": settings.get("vertical", False),
             "captions": settings.get("captions", True),
             "smart_reframe": settings.get("smart_reframe", True),
         }

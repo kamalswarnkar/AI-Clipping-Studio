@@ -18,9 +18,13 @@ from ..models.domain import Diarization, Transcript, Word
 
 log = logging.getLogger(__name__)
 
-# Vertical video is narrow: keep lines short or they wrap badly.
+# Line length for a 9:16 frame. A narrow frame wraps badly past this.
 MAX_CHARS_PER_LINE = 22
 MAX_LINES = 2
+# The frame the styling above was tuned against; other sizes scale from it.
+DESIGN_HEIGHT = 1920
+# Side margin, as a fraction of frame width, on each side.
+MARGIN_H_FRACTION = 0.07
 MAX_CUE_SECONDS = 3.2
 # A pause longer than this ends the cue, so captions breathe with the speech.
 CUE_BREAK_GAP = 0.55
@@ -45,13 +49,36 @@ def _escape(text: str) -> str:
     )
 
 
-def _wrap(words: list[str]) -> str:
+def chars_per_line(width: int, font_size: int) -> int:
+    """How many characters fit on one line, at this width and font size.
+
+    This is load-bearing, not cosmetic. WrapStyle 2 means libass breaks lines
+    only where we put a break, so a line we allow to be too long does not wrap
+    -- it runs off the edge of the frame. Deriving the limit from the actual
+    font size keeps text inside the margins at any size or frame shape.
+
+    The 0.62 is the average glyph advance as a fraction of font size, measured
+    against the 22-character line the vertical layout was tuned with. Capped at
+    42 because a longer line is hard to read in one glance however much room
+    there is.
+    """
+    if width <= 0 or font_size <= 0:
+        return MAX_CHARS_PER_LINE
+    usable = width * (1 - 2 * MARGIN_H_FRACTION)
+    return max(12, min(42, int(usable / (0.62 * font_size))))
+
+
+def _inside(t: float, spans: list[tuple[float, float]]) -> bool:
+    return any(start <= t <= end for start, end in spans)
+
+
+def _wrap(words: list[str], max_chars: int = MAX_CHARS_PER_LINE) -> str:
     """Wrap into at most MAX_LINES balanced lines using the ASS break code."""
     lines: list[str] = []
     current = ""
     for word in words:
         candidate = f"{current} {word}".strip()
-        if len(candidate) <= MAX_CHARS_PER_LINE or not current:
+        if len(candidate) <= max_chars or not current:
             current = candidate
         else:
             lines.append(current)
@@ -75,6 +102,7 @@ def group_words_into_cues(
     clip_start: float,
     clip_end: float,
     diarization: Optional[Diarization] = None,
+    max_chars: int = MAX_CHARS_PER_LINE,
 ) -> list[tuple[float, float, str]]:
     """Group words into readable cues, timed relative to the clip start.
 
@@ -93,7 +121,7 @@ def group_words_into_cues(
         end = min(clip_end - clip_start, buffer[-1].end - clip_start)
         if end <= start:
             end = start + 0.4
-        text = _wrap([_escape(w.word) for w in buffer if w.word.strip()])
+        text = _wrap([_escape(w.word) for w in buffer if w.word.strip()], max_chars)
         if text:
             cues.append((start, end, text))
         buffer.clear()
@@ -112,7 +140,7 @@ def group_words_into_cues(
             if (
                 gap > CUE_BREAK_GAP
                 or span > MAX_CUE_SECONDS
-                or projected > MAX_CHARS_PER_LINE * MAX_LINES
+                or projected > max_chars * MAX_LINES
                 or (speaker is not None and current_speaker is not None and speaker != current_speaker)
             ):
                 flush()
@@ -145,26 +173,58 @@ def build_ass(
     width: int,
     height: int,
     font: str = "Arial",
-    font_size: int = 68,
+    font_size: int = 120,
     diarization: Optional[Diarization] = None,
+    reserved_bottom: float = 0.0,
+    suppress_spans: Optional[list[tuple[float, float]]] = None,
 ) -> str:
-    """Render an ASS subtitle file for one clip."""
+    """Render an ASS subtitle file for one clip.
+
+    `font_size` is specified for a 1920-tall frame and scaled to whatever frame
+    is actually being rendered, so captions occupy the same share of the
+    picture at any output size.
+
+    `reserved_bottom` is the fraction of the frame already occupied by captions
+    burned into the source. When the source band is not being cropped away,
+    these captions are lifted above it rather than printed on top of it.
+
+    `suppress_spans` are windows in source time where the source is already
+    showing its own captions. Cues landing inside one are dropped: a second set
+    of captions saying the same words is worse than none.
+    """
     words = [
         w
         for w in transcript.words_between(clip_start, clip_end)
         if w.word.strip()
     ]
 
+    font_size = max(12, round(font_size * height / DESIGN_HEIGHT))
     cues = group_words_into_cues(
         words,
         clip_start=clip_start,
         clip_end=clip_end,
         diarization=diarization,
+        max_chars=chars_per_line(width, font_size),
     )
+
+    if suppress_spans:
+        kept = [
+            cue
+            for cue in cues
+            if not _inside(clip_start + (cue[0] + cue[1]) / 2.0, suppress_spans)
+        ]
+        if len(kept) != len(cues):
+            log.info(
+                "Dropped %d cue(s) that fell where the source shows its own captions",
+                len(cues) - len(kept),
+            )
+        cues = kept
 
     # Margins keep text clear of platform UI overlays at the bottom of the frame.
     margin_v = int(height * 0.13)
-    margin_h = int(width * 0.07)
+    if reserved_bottom > 0:
+        margin_v = max(margin_v, int(height * (reserved_bottom + 0.02)))
+    margin_h = int(width * MARGIN_H_FRACTION)
     outline = max(2, round(font_size * 0.06))
     shadow = 0
 

@@ -2,12 +2,11 @@
 
 The exact layout is a product requirement (Architecture.md section 20), so the
 formatting here is intentionally literal rather than clever. Every clip folder is
-self-contained: the rendered video plus its metadata.
+self-contained: the rendered video plus its transcript.
 """
 
 from __future__ import annotations
 
-import datetime as dt
 import logging
 import shutil
 import zipfile
@@ -29,58 +28,9 @@ def format_timecode(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
-def render_info_txt(
-    plan: ClipPlan,
-    *,
-    source_filename: str,
-    crop_strategy: str = "",
-    generated_by: str = "",
-    warnings: Optional[list[str]] = None,
-) -> str:
-    """Render Info.txt with the source metadata and analysis trail."""
-    speakers = ", ".join(plan.speakers) if plan.speakers else "Not identified"
-
-    sections = [
-        ("Source", source_filename),
-        ("Clip", plan.name),
-        ("Start", format_timecode(plan.start)),
-        ("End", format_timecode(plan.end)),
-        ("Duration", f"{plan.duration:.0f} seconds"),
-        ("Topic", plan.topic or "Not specified"),
-        ("Speakers", speakers),
-        ("Quality score", f"{plan.score:.2f}"),
-        ("Context dependency", plan.context_dependency.value),
-        ("Transcript", plan.transcript or "(no speech detected)"),
-        ("Analysis", plan.reason or "Not recorded"),
-    ]
-
-    if plan.analysis_notes:
-        sections.append(("Validation", plan.analysis_notes))
-    if crop_strategy:
-        sections.append(("Framing", crop_strategy))
-
-    breakdown = plan.breakdown.model_dump()
-    if any(breakdown.values()):
-        detail = "\n".join(
-            f"  {key.replace('_', ' ')}: {value:.2f}"
-            for key, value in breakdown.items()
-        )
-        sections.append(("Score breakdown", "\n" + detail))
-
-    if warnings:
-        sections.append(("Notes", "\n" + "\n".join(f"  - {w}" for w in warnings)))
-
-    sections.append(
-        ("Generated", dt.datetime.now().strftime("%Y-%m-%d %H:%M") + (f" using {generated_by}" if generated_by else ""))
-    )
-
-    out: list[str] = []
-    for label, value in sections:
-        out.append(f"{label}:")
-        out.append(str(value))
-        out.append("")
-
-    return "\n".join(out).rstrip() + "\n"
+def render_info_txt(plan: ClipPlan) -> str:
+    """Info.txt holds the clip transcript and nothing else."""
+    return (plan.transcript or "(no speech detected)").strip() + "\n"
 
 
 def write_clip_folder(
@@ -88,9 +38,6 @@ def write_clip_folder(
     root: Path,
     plan: ClipPlan,
     video_path: Optional[Path],
-    source_filename: str,
-    crop_strategy: str = "",
-    warnings: Optional[list[str]] = None,
 ) -> Path:
     """Create one self-contained Clip_NN folder."""
     folder = root / plan.name
@@ -101,15 +48,7 @@ def write_clip_folder(
     else:
         log.warning("No rendered video for %s; folder will lack the MP4", plan.name)
 
-    (folder / "Info.txt").write_text(
-        render_info_txt(
-            plan,
-            source_filename=source_filename,
-            crop_strategy=crop_strategy,
-            warnings=warnings,
-        ),
-        encoding="utf-8",
-    )
+    (folder / "Info.txt").write_text(render_info_txt(plan), encoding="utf-8")
     return folder
 
 
@@ -117,23 +56,15 @@ def build_export_tree(
     *,
     export_root: Path,
     source_filename: str,
-    items: Iterable[tuple[ClipPlan, Optional[Path], str]],
-    project_warnings: Optional[list[str]] = None,
+    items: Iterable[tuple[ClipPlan, Optional[Path]]],
 ) -> Path:
     """Build <SourceVideoName>/Clip_NN/... under the export root."""
     root = export_root / safe_stem(source_filename)
     root.mkdir(parents=True, exist_ok=True)
 
     count = 0
-    for plan, video_path, crop_strategy in items:
-        write_clip_folder(
-            root=root,
-            plan=plan,
-            video_path=video_path,
-            source_filename=source_filename,
-            crop_strategy=crop_strategy,
-            warnings=project_warnings,
-        )
+    for plan, video_path in items:
+        write_clip_folder(root=root, plan=plan, video_path=video_path)
         count += 1
 
     log.info("Export tree built at %s with %d clips", root, count)

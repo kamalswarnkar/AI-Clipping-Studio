@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
-import type { Clip } from "../api/types";
+import type { Clip, Project } from "../api/types";
 import { ErrorPanel, Spinner } from "../components/Common";
-import { timecode } from "../lib/format";
+import { clipAspect, timecode } from "../lib/format";
 
 function InfoRow({ label, value }: { label: string; value: string }) {
   return (
@@ -23,6 +23,7 @@ export default function ClipDetail({
   onBack: () => void;
 }) {
   const [clip, setClip] = useState<Clip | null>(null);
+  const [project, setProject] = useState<Project | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>("");
   const [showAdjust, setShowAdjust] = useState(false);
@@ -37,6 +38,9 @@ export default function ClipDetail({
         setRange({ start: c.start, end: c.end });
       })
       .catch((err) => setError((err as Error).message));
+    // The player box has to match the clip's shape, which follows the
+    // project's settings rather than a fixed 9:16.
+    api.getProject(projectId).then(setProject).catch(() => undefined);
   }, [projectId, clipId]);
 
   const applyAdjust = async () => {
@@ -74,12 +78,18 @@ export default function ClipDetail({
         ← All clips
       </button>
 
-      <div className="grid gap-10 lg:grid-cols-[minmax(0,380px)_1fr]">
+      <div
+        className={`grid gap-10 ${
+          project?.settings.vertical
+            ? "lg:grid-cols-[minmax(0,380px)_1fr]"
+            : "lg:grid-cols-[minmax(0,620px)_1fr]"
+        }`}
+      >
         {/* --- left: player --- */}
         <div>
           <div
             className="overflow-hidden rounded-lg border border-ink-800 bg-black"
-            style={{ aspectRatio: "9 / 16" }}
+            style={{ aspectRatio: clipAspect(project) }}
           >
             {clip.has_video ? (
               <video
@@ -91,7 +101,7 @@ export default function ClipDetail({
                 }
                 controls
                 playsInline
-                className="h-full w-full"
+                className="h-full w-full object-contain"
               />
             ) : (
               <div className="flex h-full items-center justify-center px-6 text-center text-sm text-ink-500">

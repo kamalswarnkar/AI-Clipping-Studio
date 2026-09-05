@@ -5,6 +5,7 @@ export interface ProjectSettings {
   vertical: boolean;
   captions: boolean;
   smart_reframe: boolean;
+  vocabulary: string;
 }
 
 export interface MediaInfo {

@@ -16,8 +16,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "backend"))
 
-# Hooks and captions contain emoji. The Windows console defaults to cp1252 and
-# raises UnicodeEncodeError on them, which would kill the run at the report step.
+# Transcripts carry whatever the speaker said, including characters the Windows
+# console's default cp1252 cannot encode. Without this the run dies at the report
+# step rather than in the pipeline.
 for _stream in (sys.stdout, sys.stderr):
     try:
         _stream.reconfigure(encoding="utf-8", errors="replace")
@@ -46,6 +47,11 @@ def main() -> int:
     parser.add_argument("--clips", type=int, default=15)
     parser.add_argument("--min", type=float, default=10.0)
     parser.add_argument("--max", type=float, default=60.0)
+    parser.add_argument(
+        "--vocabulary",
+        default="",
+        help="Names and terms to bias speech recognition toward.",
+    )
     args = parser.parse_args()
 
     configure_logging("INFO")
@@ -64,7 +70,10 @@ def main() -> int:
             status=ProjectStatus.UPLOADED.value,
         )
         project.settings = ProjectSettings(
-            clip_count=args.clips, min_duration=args.min, max_duration=args.max
+            clip_count=args.clips,
+            min_duration=args.min,
+            max_duration=args.max,
+            vocabulary=args.vocabulary,
         ).model_dump()
         session.add(project)
         session.commit()
@@ -140,7 +149,7 @@ def main() -> int:
                     breakdown=ScoreBreakdown(**(clip.breakdown or {})),
                 )
                 video = Path(clip.video_path) if clip.video_path else None
-                items.append((plan, video if video and video.exists() else None, ""))
+                items.append((plan, video if video and video.exists() else None))
 
             root = build_export_tree(
                 export_root=storage.export_dir,

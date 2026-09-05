@@ -87,6 +87,9 @@ class Settings(BaseSettings):
     whisper_cpu_threads: int = 0
     whisper_language: str = ""
     whisper_vad_filter: bool = True
+    # Names and terms that recur across your videos. Whisper is biased toward
+    # these, which is the only thing that reliably fixes unusual proper nouns.
+    whisper_vocabulary: str = ""
 
     # --- Pipeline -----------------------------------------------------------
     clip_count_default: int = 15
@@ -112,7 +115,7 @@ class Settings(BaseSettings):
     render_audio_lufs: float = -14.0
     render_workers: int = 3
     subtitle_font: str = "Arial"
-    subtitle_font_size: int = 68
+    subtitle_font_size: int = 120
     # Detect and crop away burned-in captions already present in the source.
     remove_source_subtitles: bool = True
 

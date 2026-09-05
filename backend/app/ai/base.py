@@ -40,6 +40,7 @@ class TranscriptionProvider(Protocol):
         audio_path: Path,
         *,
         language: Optional[str] = None,
+        vocabulary: str = "",
         progress: Optional[Any] = None,
     ) -> Transcript:
         ...

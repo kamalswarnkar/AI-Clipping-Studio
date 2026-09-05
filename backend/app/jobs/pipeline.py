@@ -23,7 +23,11 @@ from ..analysis import scenes as scene_analysis
 from ..analysis import selection
 from ..analysis.audio_analysis import analyze_audio
 from ..analysis.boundaries import expand_for_context, refine_boundaries
-from ..analysis.visual import analyze_visuals, detect_subtitle_band
+from ..analysis.visual import (
+    analyze_visuals,
+    detect_subtitle_band,
+    detect_subtitle_spans,
+)
 from ..config import get_settings
 from ..models.db import Candidate as CandidateRow
 from ..models.db import Clip, Job, Project, get_session
@@ -144,7 +148,7 @@ class _Context:
     def render_options(self) -> RenderOptions:
         return RenderOptions.from_settings(
             {
-                "vertical": self.options.get("vertical", True),
+                "vertical": self.options.get("vertical", False),
                 "captions": self.options.get("captions", True),
                 "smart_reframe": self.options.get("smart_reframe", True),
             }
@@ -226,6 +230,7 @@ def _stage_transcribe(ctx: _Context, report: JobReporter) -> None:
 
     ctx.transcript = providers.transcription.transcribe(
         ctx.storage.audio_path,
+        vocabulary=str(ctx.options.get("vocabulary", "")),
         progress=lambda f, m: report.progress(f, m),
     )
     ctx.storage.write_json("transcript", ctx.transcript)
@@ -290,19 +295,22 @@ def _stage_visual_analysis(ctx: _Context, report: JobReporter) -> None:
         source_height=ctx.media.height if ctx.media else 0,
         progress=lambda f, m: report.progress(f, m),
     )
-    # Burned-in captions in the source must be found before rendering: the
-    # vertical crop would otherwise cut them in half and the app would burn its
-    # own captions on top of the remains.
+    # Burned-in captions in the source must be found before rendering. The
+    # vertical crop would otherwise cut them in half, and at the source aspect
+    # ratio the app would print its own captions on top of them.
     if ctx.settings.remove_source_subtitles:
         try:
             ctx.visual.subtitle_band_top = detect_subtitle_band(ctx.source)
+            if ctx.visual.subtitle_band_top:
+                ctx.visual.subtitle_spans = detect_subtitle_spans(ctx.visual)
         except Exception as exc:  # noqa: BLE001 - purely an enhancement
             log.warning("Subtitle band detection failed: %s", exc)
 
     ctx.storage.write_json("visual", ctx.visual)
     with_faces = sum(1 for f in ctx.visual.frames if f.faces)
     band = ctx.visual.subtitle_band_top
-    extra = f", source captions from {band * 100:.0f}%" if band else ""
+    spans = len(ctx.visual.subtitle_spans)
+    extra = f", source captions from {band * 100:.0f}% in {spans} span(s)" if band else ""
     report.complete(f"{len(ctx.visual.frames)} frames, faces in {with_faces}{extra}")
 
 

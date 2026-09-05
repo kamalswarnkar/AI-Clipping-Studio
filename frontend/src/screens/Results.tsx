@@ -2,17 +2,19 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import type { Clip, Project } from "../api/types";
 import { EmptyState, Logo, Spinner, WarningList } from "../components/Common";
-import { duration, timecode } from "../lib/format";
+import { clipAspect, duration, timecode } from "../lib/format";
 
 function ClipCard({
   clip,
   projectId,
+  aspect,
   selected,
   onToggle,
   onOpen,
 }: {
   clip: Clip;
   projectId: string;
+  aspect: string;
   selected: boolean;
   onToggle: () => void;
   onOpen: () => void;
@@ -27,7 +29,7 @@ function ClipCard({
         className={`relative block w-full overflow-hidden rounded-lg border bg-ink-900 transition-colors ${
           selected ? "border-accent" : "border-ink-800 hover:border-ink-600"
         } ${ready ? "cursor-pointer" : "cursor-default"}`}
-        style={{ aspectRatio: "9 / 16" }}
+        style={{ aspectRatio: aspect }}
       >
         {clip.has_thumbnail ? (
           <img
@@ -130,6 +132,9 @@ export default function Results({
     };
   }, [projectId]);
 
+  // Clips keep the source shape unless vertical output was requested.
+  const aspect = useMemo(() => clipAspect(project), [project]);
+
   const ready = useMemo(
     () => (clips ?? []).filter((c) => c.render_status === "completed"),
     [clips],
@@ -214,12 +219,17 @@ export default function Results({
           }
         />
       ) : (
-        <div className="grid grid-cols-2 gap-5 sm:grid-cols-3 lg:grid-cols-5">
+        <div className={`grid gap-5 ${
+            project?.settings.vertical
+              ? "grid-cols-2 sm:grid-cols-3 lg:grid-cols-5"
+              : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"
+          }`}>
           {clips.map((clip) => (
             <ClipCard
               key={clip.id}
               clip={clip}
               projectId={projectId}
+              aspect={aspect}
               selected={selected.has(clip.id)}
               onToggle={() =>
                 setSelected((prev) => {

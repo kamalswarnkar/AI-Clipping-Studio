@@ -46,3 +46,19 @@ export async function copyText(text: string): Promise<boolean> {
     }
   }
 }
+
+/**
+ * CSS aspect-ratio for a project's clips.
+ *
+ * Clips keep the source shape unless vertical output was asked for, so the
+ * player and the grid have to follow the source rather than assume 9:16.
+ */
+export function clipAspect(project: {
+  settings: { vertical: boolean };
+  media_info: { width?: number; height?: number };
+} | null): string {
+  if (!project) return "16 / 9";
+  if (project.settings.vertical) return "9 / 16";
+  const { width, height } = project.media_info;
+  return width && height ? `${width} / ${height}` : "16 / 9";
+}

@@ -8,12 +8,13 @@ faster-whisper on your machine, and all reasoning runs through
 [Ollama](https://ollama.com).
 
 ```
-Upload  →  Transcribe  →  Find moments  →  Validate  →  Render  →  Hooks + Captions  →  Export
+Upload  →  Transcribe  →  Find moments  →  Validate  →  Render  →  Export
 ```
 
-For each selected moment the app produces a vertical 1080×1920 MP4 with burned-in
-subtitles, plus a metadata file describing where it came from and why it was
-chosen.
+For each selected moment the app produces an MP4 with burned-in subtitles, plus
+an `Info.txt` holding that clip's transcript. Clips keep the source aspect
+ratio, so nothing that was on screen gets cropped away; 9:16 is available as an
+option.
 
 ---
 
@@ -38,11 +39,11 @@ validated and clamped, and a deterministic renderer performs every cut.
 | `DIARIZE` | MFCC embeddings + agglomerative clustering → Speaker A/B/C | cheap |
 | `ANALYZE_SCENES` | PySceneDetect shot boundaries on the proxy | cheap |
 | `ANALYZE_AUDIO` | loudness, silence, emphasis, laughter/applause | cheap |
-| `ANALYZE_VISUALS` | OpenCV faces, motion, exposure across every sampled frame | cheap |
+| `ANALYZE_VISUALS` | OpenCV faces, motion, exposure, and when the source shows captions of its own | cheap |
 | `GENERATE_CANDIDATES` | 30–100 windows, multi-factor scored | cheap |
 | `LLM_EVALUATE` | LLM judgement, batched and run concurrently | **expensive** |
 | `VALIDATE` | context check, filler trim, dedupe, word-boundary snap | moderate |
-| `RENDER` | trim → drop source caption band → smart 9:16 crop → loudnorm → burn captions → H.264 | moderate |
+| `RENDER` | trim → optional 9:16 reframe → loudnorm → burn captions → H.264 | moderate |
 
 Only the strongest candidates reach the expensive stages. That staging is what
 keeps a 90-minute video tractable on a desktop GPU.
@@ -81,16 +82,72 @@ copy .env.example .env
 cd frontend && npm install && npm run build && cd ..
 ```
 
-Then run it:
+Steps 3 and 5 are optional: the launcher below does both if you skip them.
+
+---
+
+## Running it
+
+Double-click **`run.bat`** in the project folder (or `./run.sh` on
+macOS/Linux). That is the whole thing — no terminal commands, no separate
+windows to keep open.
+
+```bash
+run.bat
+```
+
+You never open the Python files yourself, and you do not need an editor or IDE:
+`run.bat` finds the Python inside the project's own `venv` folder and runs
+[`scripts/launch.py`](scripts/launch.py) with it. A console window opens and
+stays open while the app runs — that window *is* the app.
+
+It checks the machine and fills in whatever is missing, in order:
+
+| | |
+|---|---|
+| **Ollama** | started in the background if it is not already listening |
+| **Models** | verified against `ollama list`, and offered as a download if absent |
+| **Interface** | `npm install` + `npm run build` on the first run only |
+| **Server** | started in the foreground, so `Ctrl+C` stops it |
+| **Browser** | opened once the app actually answers, not before |
+
+Launch it a second time while it is already running and it just opens the
+browser again instead of failing on a busy port. Ollama is deliberately left
+running on exit: it may have been started by its own tray app, and a warm model
+makes the next launch much faster.
+
+Pass `--no-browser` to skip the browser. Anything that is genuinely missing
+— Ollama not installed, no `venv`, dependencies absent — stops the launcher
+with the exact command that fixes it.
+
+### Stopping it
+
+Press **Ctrl+C** in the window `run.bat` opened, or just close that window.
+Either one stops the server and every render underneath it.
+
+If that window is gone, or you started the app some other way, double-click
+**`stop.bat`**:
+
+```bash
+stop.bat
+```
+
+It stops the launcher recorded in `data/.launcher.pid`, which takes the server
+with it and closes the window `run.bat` opened. If there is no launcher — the
+server was started some other way — it falls back to whatever is listening on
+the app's port, and refuses to touch it if that turns out to be an unrelated
+program.
+
+Add `--ollama` to stop Ollama as well. Without it Ollama is left running, which
+is usually what you want: a warm model makes the next launch much faster.
+
+To develop the UI with hot reload, run `npm run dev` in `frontend/` (port 5173);
+it proxies `/api` to the backend. To start the server on its own, without the
+launcher's checks:
 
 ```bash
 venv\Scripts\python.exe -m uvicorn app.main:app --app-dir backend --port 8000
 ```
-
-Open <http://127.0.0.1:8000>.
-
-To develop the UI with hot reload, run `npm run dev` in `frontend/` (port 5173);
-it proxies `/api` to the backend.
 
 ### Check your setup
 
@@ -115,12 +172,15 @@ The settings you are most likely to change:
 | `OLLAMA_LLM_MODEL` | `qwen2.5:7b-instruct` | Any instruct model with good JSON adherence |
 | `OLLAMA_VISION_MODEL` | `qwen2.5vl:7b` | Only used when `VISION_ENABLED=true` |
 | `VISION_ENABLED` | `false` | Vision costs ~25s per candidate. Conflict is detected far more cheaply from audio + speaker turns |
-| `WHISPER_MODEL` | `base` | ~2.8× faster than `small` with near-identical output. Use `small`/`medium` for noisy audio or proper nouns |
+| `WHISPER_MODEL` | `base` | ~2.8× faster than `small` with near-identical output. A bigger model does **not** reliably fix proper nouns — see below |
+| `WHISPER_VOCABULARY` | *(empty)* | Names and terms recurring across your videos, comma separated. Per-video names go in the upload screen instead |
 | `LLM_PARALLEL` | `3` | Concurrent Ollama requests |
 | `OPENING_WEIGHT` | `0.22` | How much the first 3 seconds count toward selection |
 | `CONFLICT_WEIGHT` | `0.18` | Weight for shouting / interruption / confrontation |
 | `RENDER_WORKERS` | `3` | Parallel clip renders |
-| `REMOVE_SOURCE_SUBTITLES` | `true` | Detect captions already burned into the source and crop that band away before the 9:16 conversion |
+| `SUBTITLE_FONT_SIZE` | `120` | Caption size for a 1920-tall frame, scaled to the real output. About 6% of frame height |
+| `RENDER_WIDTH` / `RENDER_HEIGHT` | `1080` / `1920` | Only used when a project asks for the 9:16 crop |
+| `REMOVE_SOURCE_SUBTITLES` | `true` | Detect captions already burned into the source. The 9:16 crop removes that band; at the original ratio the app's own captions are placed above it |
 | `CLIP_MIN_DURATION` / `CLIP_MAX_DURATION` | `10` / `60` | Also settable per project in the UI |
 
 Scoring weights live in `backend/config/scoring.json` and can be tuned without
@@ -144,8 +204,8 @@ silently.
 ```
 <SourceVideoName>/
 ├── Clip_01/
-│   ├── Clip_01.mp4      vertical, subtitled, loudness-normalised
-│   └── Info.txt         source range, speakers, topic, transcript, analysis
+│   ├── Clip_01.mp4      subtitled, loudness-normalised, source aspect ratio
+│   └── Info.txt         the clip transcript, nothing else
 ├── Clip_02/
 └── ...
 ```
@@ -175,41 +235,98 @@ optimisation of political messaging.
 
 ---
 
+## Getting names right
+
+Speech recognition mishears names it has no reason to know. On the test footage
+"Stop Nick Shirley Act" came out as *"Stop and make Shirley act"*, and a larger
+model did not save it — `small` produced *"stop and make surely act"* for 2.4×
+the transcription time.
+
+What does fix it is telling the recogniser the words exist. Whisper accepts
+biasing terms, and with `Nick Shirley, Stop Nick Shirley Act` supplied, `base`
+transcribes the line correctly with no speed cost at all.
+
+So there are two places to put them:
+
+- **Names and terms in this video** on the upload screen, for names specific to
+  one video.
+- `WHISPER_VOCABULARY` in `.env`, for names that recur across everything you
+  cut — a channel's regular subjects, your own brand names.
+
+Both are used together. Add a term whenever you see a name come out wrong;
+correcting the transcript fixes the burned-in captions and `Info.txt` at once,
+since both come from it.
+
+## Aspect ratio
+
+Clips keep the shape of the source. A 16:9 conversation stays 16:9, so two
+people talking are still two people talking.
+
+The 9:16 crop is available per project (**Crop to vertical 9:16** on the upload
+screen) and does what the name says: it keeps the full height and discards most
+of the width. Smart reframing tracks faces to choose *where* that window sits,
+but on a wide two-shot there is no window that holds both speakers — something
+has to go. That trade is worth making for a short-form platform and not worth
+making otherwise, which is why it is off by default.
+
+Captions scale with the frame rather than assuming 1080×1920. `SUBTITLE_FONT_SIZE`
+is given for a 1920-tall frame and scaled to whatever is actually rendered, so
+captions keep the same share of the picture at any resolution. Line length is
+then derived from that size and the frame width — necessary rather than tidy,
+since ASS `WrapStyle: 2` means libass breaks lines only where the app puts a
+break, so a line allowed to be too long runs off the edge instead of wrapping.
+
 ## Working with sources that already have captions
 
-Plenty of footage arrives with captions already burned in. Converting 16:9 to
-9:16 keeps the full height but discards most of the width, which slices those
-captions down the middle -- and the app would then burn its own captions on top
-of the wreckage.
+Plenty of footage arrives with captions already burned in. `ANALYZE_VISUALS`
+looks for the signature of outlined caption text (a very bright pixel with a
+very dark pixel a few pixels away, centred horizontally, low in the frame).
 
-`ANALYZE_VISUALS` therefore looks for the signature of outlined caption text
-(a very bright pixel with a very dark pixel a few pixels away, centred
-horizontally, low in the frame). When it finds a band, the renderer excludes it
-before computing the vertical crop, so exactly one clean set of captions
-survives. Sources without burned-in captions are left untouched.
+What happens next depends on the output shape. Cropping to 9:16 removes the
+band outright — it would otherwise be sliced down the middle — so only one set
+of captions survives.
 
-Set `REMOVE_SOURCE_SUBTITLES=false` to disable the behaviour.
+At the source aspect ratio nothing is cut, so the source keeps its own
+captions and two more things follow. `ANALYZE_VISUALS` also records, per
+sampled frame, whether captions are on screen *right now*, because burned-in
+captions usually cover part of a video rather than all of it. Where the source
+is showing its own, the app drops its cues rather than stacking a second set on
+top; everywhere else it captions normally, positioned above the band. A single
+on/off flag would have been wrong either way: captions lost on the uncaptioned
+parts, or doubled up on the captioned ones.
+
+Sources without burned-in captions are left untouched. Set
+`REMOVE_SOURCE_SUBTITLES=false` to skip all of this.
 
 ---
 
 ## Performance
 
 Measured on an i5-14400F with an RX 6650 XT (8 GB, ROCm), on a **16.9-minute**
-source producing **11 clips**:
+source producing **8 clips**:
 
 | Stage | Time |
 |---|---|
-| Ingest + proxy | 23 s |
-| Transcription (`base`, CPU int8) | 50 s |
-| Diarization + scenes + audio + visual | 36 s |
-| Candidate generation | 7 s |
-| LLM evaluation (32 candidates) | 115 s |
-| Context validation (11 clips) | 31 s |
-| Rendering (11 clips) | 97 s |
-| **Total** | **≈ 6 min** |
+| Ingest + proxy | 50 s |
+| Transcription (`base`, CPU int8) | 85 s |
+| Diarization | 2 s |
+| Scene detection | 19 s |
+| Audio analysis | 2 s |
+| Visual analysis (1013 frames) | 36 s |
+| Candidate generation | 4 s |
+| LLM evaluation (32 candidates) | 185 s |
+| Context validation | 89 s |
+| Rendering (8 clips) | 83 s |
+| **Total** | **9.3 min** |
 
-LLM evaluation is the largest remaining stage. Lower `CANDIDATE_LLM_MAX` to
-trade some selection quality for speed.
+These are stage timings from one real run, not a projection. An earlier version
+of this table claimed ≈6 min, which was the previous 9.2-minute measurement
+minus the copy-generation stage that had just been removed — arithmetic rather
+than observation. The two LLM stages are where the time actually goes, and they
+vary run to run with what else is using the GPU.
+
+LLM evaluation is the largest stage. Lower `CANDIDATE_LLM_MAX` to trade some
+selection quality for speed.
 
 If you enable `VISION_ENABLED=true`, expect roughly +25 s per analysed
 candidate. The text model (4.7 GB) and vision model (6 GB) do not both fit in
@@ -224,6 +341,7 @@ calls, avoiding repeated model swaps.
 venv\Scripts\python.exe -m pytest backend/tests -q      # unit tests
 python scripts/make_test_video.py                       # synthetic test fixture
 python scripts/run_e2e.py [video.mp4] --clips 10        # full pipeline, no HTTP
+python scripts/run_e2e.py sample.mp4 --vocabulary "Nick Shirley"
 ```
 
 `make_test_video.py` builds a ~4 minute interview using Windows SAPI voices,
@@ -235,7 +353,7 @@ among filler — useful for checking selection quality against known ground trut
 ```
 backend/app/
 ├── api/routes/     HTTP endpoints
-├── ai/             providers, prompts, evaluation, copy generation
+├── ai/             providers, prompts, clip evaluation
 ├── analysis/       candidates, boundaries, scenes, audio, visual, selection
 ├── video/          ffmpeg wrapper, renderer, reframing, subtitles
 ├── jobs/           queue, pipeline orchestration, state machine
@@ -246,6 +364,12 @@ frontend/src/
 ├── screens/        Upload, Processing, Results, ClipDetail
 ├── components/     shared UI
 └── api/            typed client
+scripts/
+├── launch.py       what run.bat runs: Ollama, build, server, browser
+├── stop.py         what stop.bat runs
+├── run_e2e.py      full pipeline without the HTTP layer
+├── make_test_video.py
+└── setup_ffmpeg.py
 ```
 
 Analysis artifacts are written as JSON under

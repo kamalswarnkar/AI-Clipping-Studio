@@ -20,9 +20,11 @@ class ProjectSettings(BaseModel):
     clip_count: int = Field(default=15, ge=1, le=50)
     min_duration: float = Field(default=10.0, ge=3.0, le=180.0)
     max_duration: float = Field(default=60.0, ge=5.0, le=300.0)
-    vertical: bool = True
+    vertical: bool = False
     captions: bool = True
     smart_reframe: bool = True
+    # Names and terms Whisper would not otherwise get right.
+    vocabulary: str = Field(default="", max_length=1000)
 
     @field_validator("max_duration")
     @classmethod

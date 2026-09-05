@@ -86,6 +86,12 @@ def analyze_visuals(
     frontal, profile = _load_cascades()
     step = max(1, int(round(sample_interval * fps)))
 
+    # Region and kernel for the caption probe, matching detect_subtitle_band:
+    # centre columns only, bottom of the frame, outlined-glyph signature.
+    cap_y = int(proxy_h * 0.60)
+    cap_x0, cap_x1 = int(proxy_w * 0.20), int(proxy_w * 0.80)
+    cap_kernel = np.ones((3, 3), np.uint8)
+
     frames: list[FrameAnalysis] = []
     prev_gray: Optional[np.ndarray] = None
     idx = 0
@@ -104,6 +110,13 @@ def analyze_visuals(
             if prev_gray is not None and prev_gray.shape == gray.shape:
                 motion = float(np.mean(cv2.absdiff(gray, prev_gray)) / 255.0)
             prev_gray = gray
+
+            # --- source captions: are they on screen in this frame?
+            caption_score = 0.0
+            if cap_x1 > cap_x0 and gray.shape[0] > cap_y:
+                strip = gray[cap_y:, cap_x0:cap_x1]
+                glyph = (strip > 200) & (cv2.erode(strip, cap_kernel) < 80)
+                caption_score = float(glyph.mean())
 
             # --- faces
             # Detect on a downscaled copy: Haar cost is quadratic in pixels and
@@ -159,6 +172,7 @@ def analyze_visuals(
                     sharpness=round(
                         float(cv2.Laplacian(gray, cv2.CV_64F).var()) / 1000.0, 4
                     ),
+                    caption_score=round(caption_score, 5),
                 )
             )
 
@@ -217,6 +231,58 @@ def dominant_face_count(analysis: VisualAnalysis, start: float, end: float) -> i
     if not frames:
         return 0
     return int(np.median([len(f.faces) for f in frames]))
+
+
+def detect_subtitle_spans(
+    analysis: VisualAnalysis,
+    *,
+    merge_gap: float = 1.5,
+) -> list[tuple[float, float]]:
+    """When is the source actually showing its own captions?
+
+    `detect_subtitle_band` answers *where* they sit; this answers *when* they
+    are up. Burned-in captions usually cover part of a video, not all of it, so
+    a single flag would either suppress the app's captions everywhere or
+    nowhere. Both are wrong: the first loses captions on the uncaptioned parts,
+    the second stacks two sets of captions on the captioned parts.
+
+    Reads the per-frame scores recorded during `analyze_visuals`, so this costs
+    nothing beyond a pass over a list.
+    """
+    scores = [f.caption_score for f in analysis.frames]
+    if len(scores) < 8:
+        return []
+
+    values = np.array(scores, dtype=np.float32)
+    # A high percentile rather than the max: one bright frame is not a caption.
+    peak = float(np.percentile(values, 97))
+    if peak < 0.008:
+        return []
+
+    threshold = max(0.006, peak * 0.45)
+    interval = analysis.sample_interval or 1.0
+    half = interval / 2.0
+
+    spans: list[tuple[float, float]] = []
+    for frame, score in zip(analysis.frames, scores):
+        if score < threshold:
+            continue
+        start, end = frame.t - half, frame.t + half
+        if spans and start - spans[-1][1] <= merge_gap:
+            spans[-1] = (spans[-1][0], end)
+        else:
+            spans.append((start, end))
+
+    covered = sum(end - start for start, end in spans)
+    log.info(
+        "Source captions on screen for %.0fs across %d span(s) "
+        "(peak=%.4f, threshold=%.4f)",
+        covered,
+        len(spans),
+        peak,
+        threshold,
+    )
+    return spans
 
 
 def detect_subtitle_band(

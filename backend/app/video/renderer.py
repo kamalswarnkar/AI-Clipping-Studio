@@ -5,8 +5,12 @@ and produces a real MP4. It never asks a model anything.
 
 The filter chain is built as a single graph so ffmpeg decodes the source once:
 
-    trim -> crop (smart 9:16) -> scale -> pad -> subtitles -> encode
+    trim -> [crop (smart 9:16) -> scale -> pad] -> subtitles -> encode
     trim -> loudnorm -> aac
+
+The bracketed reframing step only runs when vertical output is asked for.
+By default the source aspect ratio is preserved: nothing is cropped away, so
+everyone on screen stays on screen.
 """
 
 from __future__ import annotations
@@ -32,7 +36,7 @@ log = logging.getLogger(__name__)
 
 @dataclass
 class RenderOptions:
-    vertical: bool = True
+    vertical: bool = False
     captions: bool = True
     smart_reframe: bool = True
     width: int = 1080
@@ -42,7 +46,7 @@ class RenderOptions:
     preset: str = "veryfast"
     target_lufs: float = -14.0
     font: str = "Arial"
-    font_size: int = 68
+    font_size: int = 120
 
     @classmethod
     def from_settings(cls, overrides: Optional[dict] = None) -> "RenderOptions":
@@ -146,7 +150,11 @@ def _build_video_filter(
             f"(ow-iw)/2:(oh-ih)/2:color=black"
         )
     else:
-        parts.append(f"scale=-2:{options.height}:flags=bicubic")
+        # Original aspect ratio: no crop, no pad, no rescale. Nothing leaves the
+        # frame, so two people talking stay two people talking. The only change
+        # is rounding to even dimensions, which yuv420p requires.
+        parts.append("scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=bicubic")
+        strategy = "original aspect ratio"
 
     parts.append(f"fps={options.fps}")
 
@@ -180,15 +188,32 @@ def render_clip(
     # --- subtitles ----------------------------------------------------------
     written_subtitles: Optional[Path] = None
     if options.captions and transcript is not None and subtitle_path is not None:
+        # Caption geometry follows the frame that is actually produced.
+        suppress_spans: list[tuple[float, float]] = []
+        if options.vertical:
+            out_w, out_h = options.width, options.height
+            # The vertical crop removes the source caption band outright, so
+            # there is nothing down there to avoid or to duplicate.
+            reserved_bottom = 0.0
+        else:
+            out_w, out_h = media.width, media.height
+            band = getattr(visual, "subtitle_band_top", None) if visual else None
+            reserved_bottom = 1.0 - band if band and 0.5 < band < 1.0 else 0.0
+            # The source keeps its own captions here, so drop ours wherever
+            # they would double up.
+            suppress_spans = list(getattr(visual, "subtitle_spans", []) or [])
+
         ass = subtitles.build_ass(
             transcript=transcript,
             clip_start=plan.start,
             clip_end=plan.end,
-            width=options.width if options.vertical else media.width,
-            height=options.height,
+            width=out_w,
+            height=out_h,
             font=options.font,
             font_size=options.font_size,
             diarization=diarization,
+            reserved_bottom=reserved_bottom,
+            suppress_spans=suppress_spans,
         )
         if "Dialogue:" in ass:
             written_subtitles = subtitles.write_ass(subtitle_path, ass)

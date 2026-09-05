@@ -87,6 +87,7 @@ export const api = {
       form.append("vertical", String(settings.vertical));
       form.append("captions", String(settings.captions));
       form.append("smart_reframe", String(settings.smart_reframe));
+      form.append("vocabulary", settings.vocabulary);
 
       const xhr = new XMLHttpRequest();
       xhr.open("POST", `${BASE}/projects/${id}/upload`);
