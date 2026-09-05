@@ -344,6 +344,51 @@ class RenderStatus(str, Enum):
 
 
 
+class VideoContext(BaseModel):
+    """What the source video is, described in the third person.
+
+    Derived once from the whole transcript and then used to describe every
+    clip, which is what lets a clip's description name the bill or the person
+    the clip itself only calls "it" or "he".
+    """
+
+    setting: str = ""
+    participants: str = ""
+    subject: str = ""
+    summary: str = ""
+    key_terms: list[str] = Field(default_factory=list)
+
+    @property
+    def is_empty(self) -> bool:
+        return not (self.summary or self.subject)
+
+    def as_prompt_block(self) -> str:
+        """The form handed to the model when describing a clip."""
+        parts = [
+            f"Setting: {self.setting}" if self.setting else "",
+            f"Participants: {self.participants}" if self.participants else "",
+            f"Subject: {self.subject}" if self.subject else "",
+            f"What happens: {self.summary}" if self.summary else "",
+            f"Recurring terms: {', '.join(self.key_terms)}" if self.key_terms else "",
+        ]
+        return "\n".join(p for p in parts if p)
+
+    def as_text(self) -> str:
+        """The form written to disk and shown in the interface."""
+        lines = []
+        if self.setting:
+            lines.append(self.setting)
+        if self.participants:
+            lines.append(f"Participants: {self.participants}")
+        if self.subject:
+            lines.append(self.subject)
+        if self.summary:
+            lines.append(self.summary)
+        if self.key_terms:
+            lines.append(f"Recurring terms: {', '.join(self.key_terms)}")
+        return "\n\n".join(lines)
+
+
 class ClipPlan(BaseModel):
     """A validated, deduplicated clip ready for rendering."""
 
@@ -360,6 +405,10 @@ class ClipPlan(BaseModel):
     breakdown: ScoreBreakdown = Field(default_factory=ScoreBreakdown)
     source_candidate_id: str = ""
     analysis_notes: str = ""
+    # Third-person description of this clip, written against the video's own
+    # context so it can name what the clip only alludes to.
+    context: str = ""
+    standalone: bool = False
 
     @property
     def duration(self) -> float:

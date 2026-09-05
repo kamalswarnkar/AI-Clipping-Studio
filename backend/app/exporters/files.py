@@ -33,6 +33,15 @@ def render_info_txt(plan: ClipPlan) -> str:
     return (plan.transcript or "(no speech detected)").strip() + "\n"
 
 
+def render_context_txt(plan: ClipPlan) -> str:
+    """Context.txt says what the clip is, in the third person.
+
+    Kept separate from Info.txt, which is the transcript verbatim. One is what
+    was said; the other is what it was about.
+    """
+    return (plan.context or "").strip() + "\n"
+
+
 def write_clip_folder(
     *,
     root: Path,
@@ -49,6 +58,10 @@ def write_clip_folder(
         log.warning("No rendered video for %s; folder will lack the MP4", plan.name)
 
     (folder / "Info.txt").write_text(render_info_txt(plan), encoding="utf-8")
+    if plan.context:
+        (folder / "Context.txt").write_text(
+            render_context_txt(plan), encoding="utf-8"
+        )
     return folder
 
 
@@ -57,10 +70,17 @@ def build_export_tree(
     export_root: Path,
     source_filename: str,
     items: Iterable[tuple[ClipPlan, Optional[Path]]],
+    video_context: str = "",
 ) -> Path:
     """Build <SourceVideoName>/Clip_NN/... under the export root."""
     root = export_root / safe_stem(source_filename)
     root.mkdir(parents=True, exist_ok=True)
+
+    # One description of the source, alongside the clips cut from it.
+    if video_context.strip():
+        (root / "About.txt").write_text(
+            video_context.strip() + "\n", encoding="utf-8"
+        )
 
     count = 0
     for plan, video_path in items:

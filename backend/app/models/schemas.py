@@ -18,7 +18,7 @@ class ProjectSettings(BaseModel):
     """User-facing options from the upload screen."""
 
     clip_count: int = Field(default=15, ge=1, le=50)
-    min_duration: float = Field(default=10.0, ge=3.0, le=180.0)
+    min_duration: float = Field(default=20.0, ge=3.0, le=180.0)
     max_duration: float = Field(default=60.0, ge=5.0, le=300.0)
     vertical: bool = False
     captions: bool = True
@@ -29,7 +29,7 @@ class ProjectSettings(BaseModel):
     @field_validator("max_duration")
     @classmethod
     def _max_above_min(cls, v: float, info) -> float:
-        minimum = info.data.get("min_duration", 10.0)
+        minimum = info.data.get("min_duration", 20.0)
         if v <= minimum:
             raise ValueError("Maximum duration must be greater than minimum duration.")
         return v
@@ -81,6 +81,8 @@ class ClipResponse(BaseModel):
     reason: str = ""
     analysis_notes: str = ""
     context_dependency: str = "low"
+    context: str = ""
+    standalone: bool = False
     score: float = 0.0
     speakers: list[str] = Field(default_factory=list)
     render_status: str = "pending"
@@ -105,6 +107,8 @@ class ClipResponse(BaseModel):
             reason=row.reason or "",
             analysis_notes=row.analysis_notes or "",
             context_dependency=row.context_dependency or "low",
+            context=row.context or "",
+            standalone=bool(row.standalone),
             score=round(row.score, 4),
             speakers=row.speakers,
             render_status=row.render_status,
@@ -130,6 +134,8 @@ class ProjectResponse(BaseModel):
     updated_at: dt.datetime
     settings: ProjectSettings
     media_info: dict[str, Any] = Field(default_factory=dict)
+    # Third-person description of the source video, derived from its transcript.
+    global_context: str = ""
     warnings: list[WarningResponse] = Field(default_factory=list)
     error: Optional[dict[str, str]] = None
     clip_count: int = 0
@@ -152,6 +158,7 @@ class ProjectResponse(BaseModel):
             updated_at=row.updated_at,
             settings=ProjectSettings(**(row.settings or {})),
             media_info=row.media_info,
+            global_context=row.global_context or "",
             warnings=[WarningResponse(**w) for w in row.warnings],
             error=error,
             clip_count=len(row.clips),

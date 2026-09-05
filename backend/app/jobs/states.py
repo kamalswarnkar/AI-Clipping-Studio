@@ -17,12 +17,14 @@ class JobType(str, Enum):
     EXTRACT_AUDIO = "EXTRACT_AUDIO"
     TRANSCRIBE = "TRANSCRIBE"
     DIARIZE = "DIARIZE"
+    SUMMARIZE = "SUMMARIZE"
     ANALYZE_SCENES = "ANALYZE_SCENES"
     ANALYZE_AUDIO = "ANALYZE_AUDIO"
     ANALYZE_VISUALS = "ANALYZE_VISUALS"
     GENERATE_CANDIDATES = "GENERATE_CANDIDATES"
     LLM_EVALUATE = "LLM_EVALUATE"
     VALIDATE = "VALIDATE"
+    DESCRIBE_CLIPS = "DESCRIBE_CLIPS"
     RENDER = "RENDER"
     PACKAGE_EXPORT = "PACKAGE_EXPORT"
 
@@ -61,12 +63,14 @@ PIPELINE_ORDER: tuple[JobType, ...] = (
     JobType.EXTRACT_AUDIO,
     JobType.TRANSCRIBE,
     JobType.DIARIZE,
+    JobType.SUMMARIZE,
     JobType.ANALYZE_SCENES,
     JobType.ANALYZE_AUDIO,
     JobType.ANALYZE_VISUALS,
     JobType.GENERATE_CANDIDATES,
     JobType.LLM_EVALUATE,
     JobType.VALIDATE,
+    JobType.DESCRIBE_CLIPS,
     JobType.RENDER,
 )
 
@@ -76,12 +80,14 @@ JOB_LABELS: dict[JobType, str] = {
     JobType.EXTRACT_AUDIO: "Extracting audio",
     JobType.TRANSCRIBE: "Transcribing",
     JobType.DIARIZE: "Identifying speakers",
+    JobType.SUMMARIZE: "Understanding the video",
     JobType.ANALYZE_SCENES: "Detecting scenes",
     JobType.ANALYZE_AUDIO: "Analyzing audio",
     JobType.ANALYZE_VISUALS: "Analyzing video",
     JobType.GENERATE_CANDIDATES: "Finding moments",
     JobType.LLM_EVALUATE: "Evaluating moments",
     JobType.VALIDATE: "Validating context",
+    JobType.DESCRIBE_CLIPS: "Describing clips",
     JobType.RENDER: "Rendering clips",
     JobType.PACKAGE_EXPORT: "Packaging export",
 }
@@ -94,6 +100,10 @@ OPTIONAL_JOBS: frozenset[JobType] = frozenset(
         JobType.ANALYZE_SCENES,
         JobType.ANALYZE_AUDIO,
         JobType.ANALYZE_VISUALS,
+        # Descriptions are reference notes, not the product. If the model is
+        # unavailable the clips are still correct, just undescribed.
+        JobType.SUMMARIZE,
+        JobType.DESCRIBE_CLIPS,
     }
 )
 

@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.analysis.boundaries import (  # noqa: E402
     is_mid_word,
+    complete_ending,
     refine_boundaries,
     sentence_ends,
     sentence_starts,
@@ -125,6 +126,61 @@ def test_dependent_openers() -> None:
     assert text_starts_dependently("But it depends on context.")
     assert text_starts_dependently("So that is why we did it.")
     assert not text_starts_dependently("Retention is the growth engine.")
+
+
+def test_dependent_openers_see_past_discourse_markers() -> None:
+    """A filler in front of the opener does not make the opener disappear.
+
+    "Well because it was one of the founding principles..." is an answer to a
+    question the viewer never heard. Testing only the raw first word sees
+    "well" and waves it through.
+    """
+    assert text_starts_dependently("Well because it was one of our principles.")
+    assert text_starts_dependently("Yeah but he was lying about the numbers.")
+    assert text_starts_dependently("Okay so this is the part people miss.")
+    assert not text_starts_dependently("Well funded programs rarely fail.")
+    assert not text_starts_dependently("Nick Shirley filed the lawsuit.")
+
+
+def test_complete_ending_finishes_the_sentence(transcript: Transcript) -> None:
+    """A clip cut mid-thought is extended to where the sentence ends."""
+    # 7.0 lands inside "But it depends on context." (6.0 - 8.0).
+    start, end = complete_ending(
+        6.0, 7.0, transcript=transcript, max_duration=30.0, total_duration=10.0
+    )
+    assert end > 7.0
+    assert start == 6.0
+
+
+def test_complete_ending_leaves_clean_endings_alone(transcript: Transcript) -> None:
+    start, end = complete_ending(
+        0.0, 4.0, transcript=transcript, max_duration=30.0, total_duration=10.0
+    )
+    assert (start, end) == (0.0, 4.0)
+
+
+def test_complete_ending_respects_max_duration(transcript: Transcript) -> None:
+    """Finishing the thought is preferred, but not at any length."""
+    start, end = complete_ending(
+        6.0, 7.0, transcript=transcript, max_duration=1.0, total_duration=10.0
+    )
+    assert start == 6.0
+    assert end <= 7.0  # never extended past the limit
+
+
+def test_complete_ending_drops_a_trailing_conjunction(transcript: Transcript) -> None:
+    """Last resort when no punctuated ending is reachable.
+
+    Ending on "...expose the fraud But" sounds cut off even though no word was
+    split. Dropping the dangling connective is not a complete sentence either,
+    but it is a complete clause.
+    """
+    # 6.0 - 7.05 is "But it depends on": a dangling preposition, and the next
+    # full stop is too far ahead to reach inside max_duration.
+    start, end = complete_ending(
+        6.0, 7.05, transcript=transcript, max_duration=1.1, total_duration=10.0
+    )
+    assert transcript.text_in_window(start, end).strip() == "But it depends"
 
 
 def test_refine_snaps_to_sentence_and_never_mid_word(transcript: Transcript) -> None:
@@ -471,3 +527,39 @@ def test_confrontation_triggers_match() -> None:
     assert not _TRIGGER_PATTERNS["confrontation"].search("We reviewed the budget.")
 
 
+
+
+# ---------------------------------------------------------------------------
+# Video and clip context
+# ---------------------------------------------------------------------------
+
+
+def test_video_context_reports_emptiness() -> None:
+    from app.models.domain import VideoContext
+
+    assert VideoContext().is_empty
+    assert not VideoContext(summary="Two men argue outside a capitol.").is_empty
+
+
+def test_video_context_prompt_block_skips_missing_fields() -> None:
+    from app.models.domain import VideoContext
+
+    block = VideoContext(setting="A street rally.", subject="A new bill.").as_prompt_block()
+    assert "Setting: A street rally." in block
+    assert "Participants" not in block  # nothing to say, so nothing printed
+
+
+def test_clip_context_strips_internal_speaker_labels() -> None:
+    """Diarization ids are internal. The system knows there were four voices,
+    not who they were, so "Speaker C" must never reach a description."""
+    from app.ai.context import _clean
+
+    assert "Speaker" not in _clean("Speaker C argues that the bill is illegal.")
+    assert "speaker" not in _clean("speaker a and Speaker B disagree.").lower()
+
+
+def test_clip_context_drops_restated_prompt_openers() -> None:
+    from app.ai.context import _clean
+
+    assert _clean("In this clip, a protester objects.") == "A protester objects."
+    assert _clean("Context: the rally continues.") == "The rally continues."

@@ -14,7 +14,7 @@ const ACCEPTED = [".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi"];
 
 const DEFAULTS: ProjectSettings = {
   clip_count: 15,
-  min_duration: 10,
+  min_duration: 20,
   max_duration: 60,
   vertical: false,
   captions: true,

@@ -93,7 +93,7 @@ class Settings(BaseSettings):
 
     # --- Pipeline -----------------------------------------------------------
     clip_count_default: int = 15
-    clip_min_duration: float = 10.0
+    clip_min_duration: float = 20.0
     clip_max_duration: float = 60.0
     candidate_pool_max: int = 80
     candidate_llm_max: int = 32

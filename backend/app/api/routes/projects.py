@@ -54,7 +54,7 @@ async def upload_video(
     project_id: str,
     file: UploadFile = File(...),
     clip_count: int = Form(default=15),
-    min_duration: float = Form(default=10.0),
+    min_duration: float = Form(default=20.0),
     max_duration: float = Form(default=60.0),
     vertical: bool = Form(default=False),
     captions: bool = Form(default=True),

@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import logging
 import uuid
 from typing import Any, Optional
 
 from sqlalchemy import (
+    Boolean,
     Float,
     ForeignKey,
     Integer,
@@ -77,6 +79,10 @@ class Project(Base, JSONMixin):
     media_info_json: Mapped[Optional[str]] = mapped_column(Text, default=None)
     settings_json: Mapped[Optional[str]] = mapped_column(Text, default=None)
     warnings_json: Mapped[Optional[str]] = mapped_column(Text, default=None)
+
+    # Third-person description of the whole video, derived from the transcript
+    # and used to describe every clip cut from it.
+    global_context: Mapped[str] = mapped_column(Text, default="")
 
     error_message: Mapped[Optional[str]] = mapped_column(Text, default=None)
     error_stage: Mapped[Optional[str]] = mapped_column(String(64), default=None)
@@ -198,6 +204,9 @@ class Clip(Base, JSONMixin):
     reason: Mapped[str] = mapped_column(Text, default="")
     analysis_notes: Mapped[str] = mapped_column(Text, default="")
     context_dependency: Mapped[str] = mapped_column(String(16), default="low")
+    # What this clip is, written against the video's own context.
+    context: Mapped[str] = mapped_column(Text, default="")
+    standalone: Mapped[bool] = mapped_column(Boolean, default=False)
     score: Mapped[float] = mapped_column(Float, default=0.0)
 
     speakers_json: Mapped[Optional[str]] = mapped_column(Text, default=None)
@@ -266,6 +275,8 @@ class Feedback(Base, JSONMixin):
 # Engine / session
 # ---------------------------------------------------------------------------
 
+log = logging.getLogger(__name__)
+
 _settings = get_settings()
 
 engine: Engine = create_engine(
@@ -290,9 +301,54 @@ def _sqlite_pragmas(dbapi_connection, _record) -> None:  # noqa: ANN001
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 
+def _add_missing_columns() -> None:
+    """Bring an existing database up to the current model.
+
+    `create_all` creates missing tables but never alters existing ones, so a
+    column added to a model is invisible to a database created before it -- and
+    every query then fails with "no such column". This is a local app the user
+    starts by double-clicking; there is no migration step for them to run, so
+    the schema catches itself up on startup.
+
+    Only additive, and only for columns with a default. Anything more than that
+    belongs in a real migration.
+    """
+    with engine.begin() as connection:
+        for table in Base.metadata.sorted_tables:
+            existing = {
+                row[1]
+                for row in connection.exec_driver_sql(
+                    f"PRAGMA table_info({table.name})"
+                ).fetchall()
+            }
+            if not existing:  # table did not exist; create_all just made it
+                continue
+            for column in table.columns:
+                if column.name in existing:
+                    continue
+                default = column.default.arg if column.default is not None else None
+                if isinstance(default, bool):
+                    literal = "1" if default else "0"
+                elif isinstance(default, (int, float)):
+                    literal = str(default)
+                elif isinstance(default, str):
+                    escaped = default.replace("'", "''")
+                    literal = f"'{escaped}'"
+                else:
+                    literal = "NULL"
+                sql = (
+                    f"ALTER TABLE {table.name} "
+                    f"ADD COLUMN {column.name} {column.type.compile(engine.dialect)} "
+                    f"DEFAULT {literal}"
+                )
+                connection.exec_driver_sql(sql)
+                log.info("Added column %s.%s", table.name, column.name)
+
+
 def init_db() -> None:
     _settings.ensure_dirs()
     Base.metadata.create_all(engine)
+    _add_missing_columns()
 
 
 def get_session() -> Session:

@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable, Optional
 
+from ..ai import context as context_ai
 from ..ai import evaluation
 from ..ai.registry import get_providers
 from ..ai.vision import analyzer as vision_analyzer
@@ -22,7 +23,11 @@ from ..analysis import candidates as candidate_gen
 from ..analysis import scenes as scene_analysis
 from ..analysis import selection
 from ..analysis.audio_analysis import analyze_audio
-from ..analysis.boundaries import expand_for_context, refine_boundaries
+from ..analysis.boundaries import (
+    complete_ending,
+    expand_for_context,
+    refine_boundaries,
+)
 from ..analysis.visual import (
     analyze_visuals,
     detect_subtitle_band,
@@ -41,6 +46,7 @@ from ..models.domain import (
     RenderStatus,
     Scene,
     Transcript,
+    VideoContext,
     VisualAnalysis,
 )
 from ..services.storage import ProjectStorage
@@ -130,6 +136,7 @@ class _Context:
         self.plans: list[ClipPlan] = []
         self.crop_strategies: dict[str, str] = {}
         self.selection_notes: list[str] = []
+        self.video_context: VideoContext = VideoContext()
 
     # --- user-facing options ------------------------------------------------
     @property
@@ -554,6 +561,42 @@ def _stage_validate(ctx: _Context, report: JobReporter) -> None:
                 total_duration=ctx.media.duration if ctx.media else 0.0,
             )
             plan.start, plan.end = refined.start, refined.end
+
+            # Refinement reports both failures rather than fixing them, because
+            # the duration clamp runs after the snapping. Repair them here.
+
+            # An opening like "Well because it was one of the founding
+            # principles..." answers a question the viewer never heard. Reach
+            # back for the sentence that makes it stand on its own.
+            if refined.opens_mid_sentence:
+                new_start, new_end = expand_for_context(
+                    plan.start,
+                    plan.end,
+                    transcript=ctx.transcript,
+                    max_duration=ctx.max_duration,
+                    total_duration=ctx.media.duration if ctx.media else 0.0,
+                )
+                if new_start < plan.start:
+                    log.info(
+                        "Opened %s earlier for a self-contained start (%.1f -> %.1f)",
+                        plan.id,
+                        plan.start,
+                        new_start,
+                    )
+                    plan.start, plan.end = new_start, new_end
+
+            # Likewise a clip that stops mid-thought: finish the sentence when
+            # there is room for it.
+            if refined.ends_mid_sentence:
+                plan.start, plan.end = complete_ending(
+                    plan.start,
+                    plan.end,
+                    transcript=ctx.transcript,
+                    max_duration=ctx.max_duration,
+                    min_duration=ctx.min_duration,
+                    total_duration=ctx.media.duration if ctx.media else 0.0,
+                )
+
             plan.transcript = ctx.transcript.text_in_window(plan.start, plan.end)
             if ctx.diarization:
                 plan.speakers = ctx.diarization.speakers_between(plan.start, plan.end)
@@ -591,6 +634,8 @@ def _stage_validate(ctx: _Context, report: JobReporter) -> None:
                 reason=plan.reason,
                 analysis_notes=plan.analysis_notes,
                 context_dependency=plan.context_dependency.value,
+                context=plan.context,
+                standalone=plan.standalone,
                 score=plan.score,
                 render_status=RenderStatus.PENDING.value,
             )
@@ -628,6 +673,94 @@ def _render_one(
         return plan, None, result.crop_strategy
     except Exception as exc:  # noqa: BLE001 - reported per clip, not fatal
         return plan, exc, None
+
+
+def _stage_summarize(ctx: _Context, report: JobReporter) -> None:
+    """Describe the whole video, so every clip can be described against it."""
+    report.start("Understanding the video")
+    if ctx.transcript is None or not ctx.transcript.segments:
+        report.complete("No transcript to summarise")
+        return
+
+    providers = get_providers()
+    llm_ok, reason = providers.llm.is_available()
+    if not llm_ok:
+        report.complete(f"Skipped: {reason}")
+        return
+
+    ctx.video_context = context_ai.summarize_video(
+        transcript=ctx.transcript,
+        llm=providers.llm,
+        diarization=ctx.diarization,
+        duration=ctx.media.duration if ctx.media else 0.0,
+        parallel=ctx.settings.llm_parallel,
+        progress=lambda f, m: report.progress(f, m),
+    )
+    ctx.storage.write_json("video_context", ctx.video_context)
+
+    with get_session() as session:
+        project = session.get(Project, ctx.project_id)
+        if project is not None:
+            project.global_context = ctx.video_context.as_text()
+            session.commit()
+
+    if ctx.video_context.is_empty:
+        report.complete("No description produced")
+    else:
+        report.complete(ctx.video_context.subject[:60] or "Video described")
+
+
+def _stage_describe_clips(ctx: _Context, report: JobReporter) -> None:
+    """Describe each clip in terms of the video it was cut from."""
+    report.start("Describing clips")
+    if not ctx.plans:
+        report.complete("No clips to describe")
+        return
+
+    providers = get_providers()
+    llm_ok, reason = providers.llm.is_available()
+    if not llm_ok or ctx.video_context.is_empty:
+        report.complete(f"Skipped: {reason or 'no video context'}")
+        return
+
+    # One independent call per clip, so run them together.
+    workers = max(1, min(ctx.settings.llm_parallel, len(ctx.plans)))
+    described = 0
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="describe") as pool:
+        futures = {
+            pool.submit(
+                context_ai.describe_clip,
+                global_context=ctx.video_context,
+                text=plan.transcript,
+                start=plan.start,
+                end=plan.end,
+                llm=providers.llm,
+            ): plan
+            for plan in ctx.plans
+        }
+        for future in as_completed(futures):
+            plan = futures[future]
+            try:
+                plan.context, plan.standalone = future.result()
+                if plan.context:
+                    described += 1
+            except Exception as exc:  # noqa: BLE001 - a description is not the product
+                log.warning("Could not describe %s: %s", plan.name, exc)
+            report.progress(described / max(1, len(ctx.plans)), f"{described} described")
+
+    with get_session() as session:
+        for plan in ctx.plans:
+            clip = (
+                session.query(Clip)
+                .filter(Clip.project_id == ctx.project_id, Clip.index == plan.index)
+                .first()
+            )
+            if clip is not None:
+                clip.context = plan.context
+                clip.standalone = plan.standalone
+        session.commit()
+
+    report.complete(f"{described}/{len(ctx.plans)} described")
 
 
 def _stage_render(ctx: _Context, report: JobReporter) -> None:
@@ -705,12 +838,14 @@ STAGE_FUNCTIONS: dict[JobType, Callable[[_Context, JobReporter], None]] = {
     JobType.EXTRACT_AUDIO: _stage_extract_audio,
     JobType.TRANSCRIBE: _stage_transcribe,
     JobType.DIARIZE: _stage_diarize,
+    JobType.SUMMARIZE: _stage_summarize,
     JobType.ANALYZE_SCENES: _stage_scenes,
     JobType.ANALYZE_AUDIO: _stage_audio_analysis,
     JobType.ANALYZE_VISUALS: _stage_visual_analysis,
     JobType.GENERATE_CANDIDATES: _stage_candidates,
     JobType.LLM_EVALUATE: _stage_llm_evaluate,
     JobType.VALIDATE: _stage_validate,
+    JobType.DESCRIBE_CLIPS: _stage_describe_clips,
     JobType.RENDER: _stage_render,
 }
 

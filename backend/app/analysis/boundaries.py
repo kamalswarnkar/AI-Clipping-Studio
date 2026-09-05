@@ -28,8 +28,20 @@ _DEPENDENT_OPENERS = (
     "it ", "he ", "she ", "they ", "this ", "that ", "those ", "these ",
 )
 
+# Discourse markers that carry no meaning of their own. They sit in front of the
+# word that actually decides whether an opening is self-contained.
+_LEADING_FILLERS = (
+    "well ", "so ", "yeah ", "yes ", "no ", "okay ", "ok ", "right ", "now ",
+    "look ", "see ", "i mean ", "you know ", "like ", "um ", "uh ", "oh ",
+    "actually ", "basically ", "honestly ",
+)
+
 # How far forward to look for a clean sentence start when none is nearby.
 FORWARD_SNAP_WINDOW = 6.0
+# How far forward to look for the end of the sentence in progress. A clip that
+# stops mid-thought reads as broken, and the words needed to finish it are
+# usually a second or two away.
+END_FORWARD_WINDOW = 8.0
 
 # Padding so speech is never clipped by frame rounding.
 LEAD_IN = 0.18
@@ -99,6 +111,23 @@ def sentence_ends(transcript: Transcript) -> list[float]:
     return sorted(set(ends))
 
 
+def punctuated_ends(transcript: Transcript) -> list[float]:
+    """Only the ends that carry terminal punctuation.
+
+    `sentence_ends` also returns every segment's last word, which is right for
+    snapping -- a segment boundary is usually a decent place to cut -- but wrong
+    for deciding whether a thought finished. Whisper ends a segment wherever its
+    decoding window ran out, including in the middle of "...expose the fraud
+    But".
+    """
+    ends: list[float] = []
+    for segment in transcript.segments:
+        for word in segment.words:
+            if _SENTENCE_END.search(word.word.strip()):
+                ends.append(word.end)
+    return sorted(set(ends))
+
+
 def pause_points(transcript: Transcript, *, min_gap: float = 0.35) -> list[float]:
     """Midpoints of silences between words -- natural places to cut."""
     words = _words_sorted(transcript)
@@ -134,8 +163,21 @@ def is_mid_word(transcript: Transcript, t: float) -> bool:
 
 
 def text_starts_dependently(text: str) -> bool:
-    """Heuristic: does this opening line lean on missing context?"""
-    lowered = text.strip().lower()
+    """Heuristic: does this opening line lean on missing context?
+
+    Discourse markers are stripped first. "Well because it was one of the
+    founding principles..." is an answer to a question the viewer did not hear,
+    but testing the raw first word sees "well" and calls it clean. The filler
+    is not the opener; the word after it is.
+    """
+    lowered = text.strip().lower().lstrip("-- ")
+    while True:
+        for filler in _LEADING_FILLERS:
+            if lowered.startswith(filler):
+                lowered = lowered[len(filler):].lstrip(" ,")
+                break
+        else:
+            break
     return any(lowered.startswith(opener) for opener in _DEPENDENT_OPENERS)
 
 
@@ -146,7 +188,7 @@ def refine_boundaries(
     transcript: Transcript,
     audio: Optional[AudioAnalysis] = None,
     scenes: Optional[list[Scene]] = None,
-    min_duration: float = 10.0,
+    min_duration: float = 20.0,
     max_duration: float = 60.0,
     total_duration: float = 0.0,
     search_window: float = 2.5,
@@ -194,18 +236,25 @@ def refine_boundaries(
                     new_start, start_kind = pause, "pause"
 
     # --- end ----------------------------------------------------------------
+    # Symmetrical to the start: a sentence end is strongly preferred, and it is
+    # worth running a little long to reach one. A pause is not a thought ending
+    # -- people pause mid-sentence constantly -- so it is a last resort.
     new_end, end_kind = end, "requested"
     candidate = _nearest(ends, end, search_window)
     if candidate is not None:
         new_end, end_kind = candidate, "sentence"
     else:
-        pause = _nearest(pauses, end, search_window)
-        if pause is not None:
-            new_end, end_kind = pause, "pause"
+        forward = [e for e in ends if end < e <= end + END_FORWARD_WINDOW]
+        if forward and (forward[0] - new_start) <= max_duration:
+            new_end, end_kind = forward[0], "sentence(forward)"
         else:
-            cut = _nearest(cuts, end, 1.2)
-            if cut is not None:
-                new_end, end_kind = cut, "scene"
+            pause = _nearest(pauses, end, search_window)
+            if pause is not None:
+                new_end, end_kind = pause, "pause"
+            else:
+                cut = _nearest(cuts, end, 1.2)
+                if cut is not None:
+                    new_end, end_kind = cut, "scene"
 
     # Never cut through a word, whatever the snapping produced.
     words = _words_sorted(transcript)
@@ -239,10 +288,22 @@ def refine_boundaries(
             new_end = total_duration
 
     if new_end - new_start > max_duration:
-        # Trim from the front: the payoff is usually at the end.
+        # Trim from the front: the payoff is usually at the end. Snap forward to
+        # a real sentence start -- cutting to the raw arithmetic point is how a
+        # clip ends up opening on half a phrase.
         trimmed = new_end - max_duration
-        snapped = _nearest(starts, trimmed, 2.0)
-        new_start = snapped if snapped is not None and snapped < new_end else trimmed
+        forward = [
+            s
+            for s in starts
+            if s >= trimmed and (new_end - s) >= min_duration
+        ]
+        if forward:
+            new_start = forward[0]
+        else:
+            snapped = _nearest(starts, trimmed, 2.0)
+            new_start = (
+                snapped if snapped is not None and snapped < new_end else trimmed
+            )
 
     opening = transcript.text_in_window(new_start, new_start + 6.0)
     ending_text = transcript.text_in_window(max(0.0, new_end - 6.0), new_end)
@@ -280,3 +341,100 @@ def expand_for_context(
         if opening and not text_starts_dependently(opening):
             return max(0.0, candidate - LEAD_IN), end
     return start, end
+
+
+def complete_ending(
+    start: float,
+    end: float,
+    *,
+    transcript: Transcript,
+    max_duration: float,
+    min_duration: float = 0.0,
+    total_duration: float = 0.0,
+    lookahead: float = 8.0,
+) -> tuple[float, float]:
+    """Push the end forward to where the sentence in progress actually finishes.
+
+    `refine_boundaries` already prefers a sentence end, but it works inside a
+    search window and can be overruled by the duration constraints applied
+    afterwards. This is the repair pass: given a clip that still stops
+    mid-thought, find the next sentence end and take it if there is room.
+
+    Extending is preferred. Failing that -- fast speech can run a long way
+    without Whisper emitting terminal punctuation -- the end is pulled *back* to
+    the last completed sentence, provided the clip stays above `min_duration`.
+    Ending a little early beats ending on the word "But".
+
+    Returns the window unchanged only when the ending is already clean or when
+    neither direction has room.
+    """
+    tail = transcript.text_in_window(max(0.0, end - 6.0), end)
+    if not tail or _SENTENCE_END.search(tail.strip()):
+        return start, end
+
+    ends = punctuated_ends(transcript)
+
+    for candidate in ends:
+        if candidate <= end:
+            continue
+        if candidate > end + lookahead:
+            break
+        new_end = candidate + LEAD_OUT
+        if total_duration > 0:
+            new_end = min(new_end, total_duration)
+        if (new_end - start) <= max_duration:
+            return start, round(new_end, 3)
+        break
+
+    for candidate in reversed(ends):
+        if candidate >= end:
+            continue
+        new_end = candidate + LEAD_OUT
+        if (new_end - start) >= min_duration:
+            return start, round(new_end, 3)
+        break
+
+    return start, _drop_dangling_tail(
+        start, end, transcript=transcript, min_duration=min_duration
+    )
+
+
+# How much may be shaved off the end to lose a trailing connective. This is a
+# tidy-up, not a re-cut: past a second or so it is removing content.
+MAX_TAIL_TRIM = 1.5
+
+# Words a thought does not end on. A clip closing on "But" reads as broken even
+# though nothing was cut mid-word.
+_DANGLING_TAIL = {
+    "but", "and", "so", "or", "because", "that", "which", "who", "what",
+    "when", "where", "if", "then", "the", "a", "an", "to", "of", "in", "on",
+    "for", "with", "at", "by", "is", "was", "are", "were", "i", "we", "they",
+    "he", "she", "it", "you",
+}
+
+
+def _drop_dangling_tail(
+    start: float,
+    end: float,
+    *,
+    transcript: Transcript,
+    min_duration: float,
+) -> float:
+    """Pull the end back off trailing connectives.
+
+    The last resort when no punctuated ending is reachable: fast speech can run
+    a long way without Whisper emitting a full stop. Ending on "...expose the
+    fraud" instead of "...expose the fraud But" is not a complete sentence
+    either, but it is a complete clause, and it does not sound cut off.
+    """
+    # words_between, not a containment filter: it is what decides which words
+    # the clip's text contains, and a word straddling the cut counts as inside.
+    floor = end - MAX_TAIL_TRIM
+    words = transcript.words_between(start, end)
+    while len(words) > 1 and words[-1].word.strip().strip(",.!?\"')").lower() in _DANGLING_TAIL:
+        candidate = round(words[-2].end, 3)
+        if (candidate - start) < min_duration or candidate < floor:
+            break
+        end = candidate
+        words = transcript.words_between(start, end)
+    return end

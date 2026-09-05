@@ -45,7 +45,7 @@ def main() -> int:
         "video", nargs="?", default=str(REPO / "data" / "samples" / "interview.mp4")
     )
     parser.add_argument("--clips", type=int, default=15)
-    parser.add_argument("--min", type=float, default=10.0)
+    parser.add_argument("--min", type=float, default=20.0)
     parser.add_argument("--max", type=float, default=60.0)
     parser.add_argument(
         "--vocabulary",
@@ -147,6 +147,8 @@ def main() -> int:
                     analysis_notes=clip.analysis_notes or "",
                     context_dependency=ContextDependency(clip.context_dependency or "low"),
                     breakdown=ScoreBreakdown(**(clip.breakdown or {})),
+                    context=clip.context or "",
+                    standalone=bool(clip.standalone),
                 )
                 video = Path(clip.video_path) if clip.video_path else None
                 items.append((plan, video if video and video.exists() else None))
@@ -155,6 +157,7 @@ def main() -> int:
                 export_root=storage.export_dir,
                 source_filename=project.source_filename,
                 items=items,
+                video_context=project.global_context or "",
             )
             zip_path = zip_directory(root, storage.zip_path(project.source_filename))
             print(f"\nEXPORT: {root}")

@@ -39,6 +39,7 @@ def _build(project_id: str, clip_ids: list[str] | None) -> tuple[Path, int, str]
             raise HTTPException(status_code=404, detail="No clips to export.")
 
         source_filename = project.source_filename or "video.mp4"
+        video_context = project.global_context or ""
 
         items = []
         for clip in clips:
@@ -55,6 +56,8 @@ def _build(project_id: str, clip_ids: list[str] | None) -> tuple[Path, int, str]
                 analysis_notes=clip.analysis_notes or "",
                 context_dependency=ContextDependency(clip.context_dependency or "low"),
                 breakdown=ScoreBreakdown(**(clip.breakdown or {})),
+                context=clip.context or "",
+                standalone=bool(clip.standalone),
             )
             video = Path(clip.video_path) if clip.video_path else None
             if video is not None and not video.exists():
@@ -66,6 +69,7 @@ def _build(project_id: str, clip_ids: list[str] | None) -> tuple[Path, int, str]
         export_root=storage.export_dir,
         source_filename=source_filename,
         items=items,
+        video_context=video_context,
     )
     zip_path = zip_directory(root, storage.zip_path(source_filename))
     return zip_path, len(items), source_filename

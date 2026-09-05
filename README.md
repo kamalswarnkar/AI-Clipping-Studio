@@ -8,7 +8,7 @@ faster-whisper on your machine, and all reasoning runs through
 [Ollama](https://ollama.com).
 
 ```
-Upload  →  Transcribe  →  Find moments  →  Validate  →  Render  →  Export
+Upload  →  Transcribe  →  Understand  →  Find moments  →  Validate  →  Render  →  Export
 ```
 
 For each selected moment the app produces an MP4 with burned-in subtitles, plus
@@ -37,12 +37,14 @@ validated and clamped, and a deterministic renderer performs every cut.
 | `EXTRACT_AUDIO` | 16 kHz mono WAV for ASR and analysis | cheap |
 | `TRANSCRIBE` | faster-whisper with **word-level** timestamps | moderate |
 | `DIARIZE` | MFCC embeddings + agglomerative clustering → Speaker A/B/C | cheap |
+| `SUMMARIZE` | Describes the whole video from its transcript, third person | moderate |
 | `ANALYZE_SCENES` | PySceneDetect shot boundaries on the proxy | cheap |
 | `ANALYZE_AUDIO` | loudness, silence, emphasis, laughter/applause | cheap |
 | `ANALYZE_VISUALS` | OpenCV faces, motion, exposure, and when the source shows captions of its own | cheap |
 | `GENERATE_CANDIDATES` | 30–100 windows, multi-factor scored | cheap |
 | `LLM_EVALUATE` | LLM judgement, batched and run concurrently | **expensive** |
-| `VALIDATE` | context check, filler trim, dedupe, word-boundary snap | moderate |
+| `VALIDATE` | context check, filler trim, dedupe, sentence-boundary snap | moderate |
+| `DESCRIBE_CLIPS` | Describes each clip against the video's own context | moderate |
 | `RENDER` | trim → optional 9:16 reframe → loudnorm → burn captions → H.264 | moderate |
 
 Only the strongest candidates reach the expensive stages. That staging is what
@@ -181,7 +183,7 @@ The settings you are most likely to change:
 | `SUBTITLE_FONT_SIZE` | `120` | Caption size for a 1920-tall frame, scaled to the real output. About 6% of frame height |
 | `RENDER_WIDTH` / `RENDER_HEIGHT` | `1080` / `1920` | Only used when a project asks for the 9:16 crop |
 | `REMOVE_SOURCE_SUBTITLES` | `true` | Detect captions already burned into the source. The 9:16 crop removes that band; at the original ratio the app's own captions are placed above it |
-| `CLIP_MIN_DURATION` / `CLIP_MAX_DURATION` | `10` / `60` | Also settable per project in the UI |
+| `CLIP_MIN_DURATION` / `CLIP_MAX_DURATION` | `20` / `60` | Also settable per project in the UI |
 
 Scoring weights live in `backend/config/scoring.json` and can be tuned without
 touching code.
@@ -203,8 +205,10 @@ silently.
 
 ```
 <SourceVideoName>/
+├── About.txt            what the source video is
 ├── Clip_01/
 │   ├── Clip_01.mp4      subtitled, loudness-normalised, source aspect ratio
+│   ├── Context.txt      what the clip is, in the third person
 │   └── Info.txt         the clip transcript, nothing else
 ├── Clip_02/
 └── ...
@@ -234,6 +238,50 @@ faithfully. It does not do voter targeting, demographic persuasion, or
 optimisation of political messaging.
 
 ---
+
+## Where a clip starts and stops
+
+A clip that opens halfway through a sentence, or stops before the thought
+lands, is unusable however good the moment was. Two guards run after the
+boundaries are otherwise settled, because the duration clamp can reintroduce
+both problems after the snapping is done:
+
+- **A dependent opening is pushed back.** "Well because it was one of the
+  founding principles..." is an answer to a question the viewer never heard.
+  Discourse markers are stripped before the test, so `well`, `yeah` and `okay`
+  do not hide the `because` behind them, and the start moves back to the
+  sentence that stands on its own.
+- **An unfinished ending is completed.** The end extends to the next full stop
+  when there is room inside the maximum duration. Failing that it pulls back to
+  the previous one — fast speech can run a long way without Whisper punctuating
+  anything. Failing that too, trailing connectives are dropped, so a clip ends
+  on "...they're making it illegal to expose the fraud" rather than on
+  "...expose the fraud But".
+
+Only punctuation counts as a sentence ending for these repairs. Whisper ends a
+*segment* wherever its decoding window ran out, which is frequently mid-clause.
+
+## Context
+
+Each clip is described in the third person, and the description is written
+against a description of the whole video rather than the clip alone. That is
+what lets a clip's notes name the bill, the city or the person the clip itself
+only calls "it" or "he".
+
+`SUMMARIZE` builds the video-level description from the full transcript. Long
+transcripts do not fit in a local model's context window, so it is map-reduce:
+each section is summarised on its own, then the section summaries are
+synthesised into one description — setting, participants, subject, what
+happens, and the terms that recur.
+
+`DESCRIBE_CLIPS` then describes each clip against that. The result appears on
+the clip screen, and in the export as `Context.txt` beside each clip, with the
+video-level description as `About.txt` at the top of the folder. `Info.txt`
+stays the transcript verbatim: one file is what was said, the other is what it
+was about.
+
+Both stages are optional. If Ollama is unavailable the clips are still cut
+correctly, just undescribed.
 
 ## Getting names right
 
@@ -307,23 +355,24 @@ source producing **8 clips**:
 
 | Stage | Time |
 |---|---|
-| Ingest + proxy | 50 s |
-| Transcription (`base`, CPU int8) | 85 s |
-| Diarization | 2 s |
-| Scene detection | 19 s |
-| Audio analysis | 2 s |
-| Visual analysis (1013 frames) | 36 s |
-| Candidate generation | 4 s |
-| LLM evaluation (32 candidates) | 185 s |
-| Context validation | 89 s |
-| Rendering (8 clips) | 83 s |
-| **Total** | **9.3 min** |
+| Ingest + proxy | 22 s |
+| Transcription (`base`, CPU int8) | 41 s |
+| Diarization | 1 s |
+| Video summary | 24 s |
+| Scene detection | 9 s |
+| Audio analysis | 1 s |
+| Visual analysis (1013 frames) | 25 s |
+| Candidate generation | 3 s |
+| LLM evaluation (32 candidates) | 85 s |
+| Context validation | 18 s |
+| Clip descriptions (8 clips) | 23 s |
+| Rendering (8 clips) | 36 s |
+| **Total** | **4.8 min** |
 
-These are stage timings from one real run, not a projection. An earlier version
-of this table claimed ≈6 min, which was the previous 9.2-minute measurement
-minus the copy-generation stage that had just been removed — arithmetic rather
-than observation. The two LLM stages are where the time actually goes, and they
-vary run to run with what else is using the GPU.
+These are stage timings from one real run, not a projection. Expect the LLM
+stages to move around: evaluation alone has been measured anywhere from 74 s to
+185 s on the same source, depending on what else is holding the GPU and whether
+the model was already warm.
 
 LLM evaluation is the largest stage. Lower `CANDIDATE_LLM_MAX` to trade some
 selection quality for speed.

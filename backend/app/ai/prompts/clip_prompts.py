@@ -283,3 +283,121 @@ Decide:
 
 JSON only.
 """.strip()
+
+
+# ---------------------------------------------------------------------------
+# Context: what the video is, and what each clip is within it
+# ---------------------------------------------------------------------------
+# Written in the third person on purpose. These descriptions are read by
+# someone deciding whether to publish a clip, so they must describe the footage
+# rather than address the viewer or speak as the speaker.
+
+_THIRD_PERSON_RULES = """
+- Third person throughout. "The speaker argues..." / "Two men debate..."
+  Never "you", never "I", never "we".
+- Describe only what is in the transcript. No speculation about motives,
+  outcomes, or anything said off-camera.
+- Name people, places, organisations and named subjects when the transcript
+  names them. Concrete terms are the whole point of this.
+- Attribute claims to whoever makes them. A speaker's assertion is not a fact.
+- Plain, factual sentences. No marketing language, no adjectives of praise or
+  condemnation, no rhetorical questions.
+""".strip()
+
+SUMMARY_SYSTEM = f"""
+You summarise video transcripts for an editor's reference notes.
+
+{_THIRD_PERSON_RULES}
+""".strip()
+
+CHUNK_SUMMARY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string", "minLength": 40, "maxLength": 400},
+    },
+    "required": ["summary"],
+}
+
+GLOBAL_CONTEXT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "setting": {"type": "string", "minLength": 10, "maxLength": 200},
+        "participants": {"type": "string", "minLength": 3, "maxLength": 200},
+        "subject": {"type": "string", "minLength": 20, "maxLength": 400},
+        "summary": {"type": "string", "minLength": 80, "maxLength": 700},
+        "key_terms": {
+            "type": "array",
+            "items": {"type": "string", "maxLength": 60},
+            "minItems": 0,
+            "maxItems": 12,
+        },
+    },
+    "required": ["setting", "participants", "subject", "summary"],
+}
+
+CLIP_CONTEXT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "context": {"type": "string", "minLength": 60, "maxLength": 600},
+        "standalone": {"type": "boolean"},
+    },
+    "required": ["context"],
+}
+
+
+def build_chunk_summary_prompt(*, text: str, start: float, end: float) -> str:
+    return f"""
+[TRANSCRIPT {start:.0f}s to {end:.0f}s]
+{text}
+
+Summarise this stretch in two or three sentences: who is speaking, where they
+appear to be, and what is actually discussed. Name every person, place,
+organisation and named subject the transcript mentions.
+
+JSON only.
+""".strip()
+
+
+def build_global_context_prompt(*, summaries: str, speakers: str, duration: float) -> str:
+    return f"""
+[SECTION SUMMARIES, IN ORDER, OF A {duration / 60:.0f}-MINUTE VIDEO]
+{summaries}
+
+[DISTINCT VOICES DETECTED]
+{speakers or "unknown"}
+
+Describe the video as a whole, for an editor who has not watched it:
+
+- setting: where this takes place and what kind of footage it is
+  (a street interview, a piece to camera, a panel, a protest).
+- participants: who appears, by name where the transcript names them,
+  otherwise by role ("an interviewer", "a counter-protester"). Do not invent
+  names, and do not use internal labels like "Speaker A".
+- subject: what the video is about, in one or two sentences.
+- summary: three to five sentences covering what actually happens, in order.
+- key_terms: named people, places, organisations, bills or events that recur.
+
+JSON only.
+""".strip()
+
+
+def build_clip_context_prompt(*, global_context: str, text: str, start: float, end: float) -> str:
+    return f"""
+[THE VIDEO THIS CLIP COMES FROM]
+{global_context}
+
+[THE CLIP, {start:.0f}s to {end:.0f}s INTO THAT VIDEO]
+{text}
+
+Write `context`: three or four sentences telling an editor what this clip is.
+Start by placing it in the video above -- the setting, and who is speaking --
+then say what happens in the clip itself and what is being claimed or argued.
+Use the names and terms from the video description wherever the clip refers to
+them indirectly, so someone reading this alone knows what is being talked
+about. Describe only this clip; do not narrate the rest of the video.
+
+Also set `standalone`: true if the clip makes sense to someone who has not seen
+the rest of the video, false if it depends on something outside it.
+
+JSON only.
+""".strip()

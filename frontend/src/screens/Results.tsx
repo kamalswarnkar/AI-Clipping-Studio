@@ -202,6 +202,17 @@ export default function Results({
         </div>
       )}
 
+      {project?.global_context && (
+        <details className="mb-8">
+          <summary className="cursor-pointer list-none text-xs text-ink-500 hover:text-ink-300">
+            About this video
+          </summary>
+          <p className="panel mt-2 whitespace-pre-line px-4 py-3 text-[13px] leading-relaxed text-ink-300">
+            {project.global_context}
+          </p>
+        </details>
+      )}
+
       {notice && (
         <p className="mb-6 rounded-md border border-ink-800 bg-ink-900 px-3 py-2.5 text-[13px] text-ink-300">
           {notice}

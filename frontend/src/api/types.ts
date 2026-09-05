@@ -38,6 +38,7 @@ export interface Project {
   updated_at: string;
   settings: ProjectSettings;
   media_info: MediaInfo;
+  global_context: string;
   warnings: PipelineWarning[];
   error: PipelineErrorDetail | null;
   clip_count: number;
@@ -79,6 +80,8 @@ export interface Clip {
   reason: string;
   analysis_notes: string;
   context_dependency: string;
+  context: string;
+  standalone: boolean;
   score: number;
   speakers: string[];
   render_status: "pending" | "rendering" | "completed" | "failed";

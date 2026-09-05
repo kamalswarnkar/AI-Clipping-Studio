@@ -169,7 +169,7 @@ def adjust_clip(
             start,
             end,
             transcript=transcript,
-            min_duration=float(settings.get("min_duration", 10.0)),
+            min_duration=float(settings.get("min_duration", 20.0)),
             max_duration=float(settings.get("max_duration", 60.0)),
             total_duration=duration,
             search_window=1.2,  # respect the user's intent; only tidy the edges

@@ -187,6 +187,20 @@ export default function ClipDetail({
             </p>
           )}
 
+          {clip.context && (
+            <section className="mb-8">
+              <div className="label mb-2">What this clip is</div>
+              <p className="panel px-4 py-3 text-[13px] leading-relaxed text-ink-200">
+                {clip.context}
+              </p>
+              {!clip.standalone && (
+                <p className="mt-2 text-[11px] text-ink-500">
+                  Leans on context from elsewhere in the video.
+                </p>
+              )}
+            </section>
+          )}
+
           <section>
             <div className="label mb-2">Clip information</div>
             <div className="panel divide-y divide-ink-850 px-4 py-2">
