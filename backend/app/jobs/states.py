@@ -18,6 +18,7 @@ class JobType(str, Enum):
     TRANSCRIBE = "TRANSCRIBE"
     DIARIZE = "DIARIZE"
     SUMMARIZE = "SUMMARIZE"
+    REFINE_TRANSCRIPT = "REFINE_TRANSCRIPT"
     ANALYZE_SCENES = "ANALYZE_SCENES"
     ANALYZE_AUDIO = "ANALYZE_AUDIO"
     ANALYZE_VISUALS = "ANALYZE_VISUALS"
@@ -64,6 +65,7 @@ PIPELINE_ORDER: tuple[JobType, ...] = (
     JobType.TRANSCRIBE,
     JobType.DIARIZE,
     JobType.SUMMARIZE,
+    JobType.REFINE_TRANSCRIPT,
     JobType.ANALYZE_SCENES,
     JobType.ANALYZE_AUDIO,
     JobType.ANALYZE_VISUALS,
@@ -81,6 +83,7 @@ JOB_LABELS: dict[JobType, str] = {
     JobType.TRANSCRIBE: "Transcribing",
     JobType.DIARIZE: "Identifying speakers",
     JobType.SUMMARIZE: "Understanding the video",
+    JobType.REFINE_TRANSCRIPT: "Correcting names",
     JobType.ANALYZE_SCENES: "Detecting scenes",
     JobType.ANALYZE_AUDIO: "Analyzing audio",
     JobType.ANALYZE_VISUALS: "Analyzing video",
@@ -103,6 +106,7 @@ OPTIONAL_JOBS: frozenset[JobType] = frozenset(
         # Descriptions are reference notes, not the product. If the model is
         # unavailable the clips are still correct, just undescribed.
         JobType.SUMMARIZE,
+        JobType.REFINE_TRANSCRIPT,
         JobType.DESCRIBE_CLIPS,
     }
 )

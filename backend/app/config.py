@@ -90,6 +90,8 @@ class Settings(BaseSettings):
     # Names and terms that recur across your videos. Whisper is biased toward
     # these, which is the only thing that reliably fixes unusual proper nouns.
     whisper_vocabulary: str = ""
+    # Re-transcribe once with the names the video's own summary produced.
+    whisper_refine_pass: bool = True
 
     # --- Pipeline -----------------------------------------------------------
     clip_count_default: int = 15

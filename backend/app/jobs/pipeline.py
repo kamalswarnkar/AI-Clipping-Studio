@@ -10,6 +10,7 @@ the last good state instead of redoing transcription.
 
 from __future__ import annotations
 
+import difflib
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -710,6 +711,80 @@ def _stage_summarize(ctx: _Context, report: JobReporter) -> None:
         report.complete(ctx.video_context.subject[:60] or "Video described")
 
 
+def _stage_refine_transcript(ctx: _Context, report: JobReporter) -> None:
+    """Transcribe again, biased toward the names the video itself supplied.
+
+    Speech recognition mishears names it has no reason to know, and a bigger
+    model does not fix that -- it mishears them more confidently. Telling the
+    recogniser the words exist does fix it, but only if someone knows them in
+    advance.
+
+    They do not have to. A name that is mangled in one sentence is usually
+    correct in another, so the video-level summary recovers it from the first
+    pass ("Stop Nick Shirley Act" from a transcript that also contains "the
+    Stopnic Shirley Act"). Feeding those terms back and decoding once more
+    corrects every mangled mention, with no input from the user.
+    """
+    report.start("Correcting names")
+
+    if not ctx.settings.whisper_refine_pass:
+        report.complete("Disabled")
+        return
+    if ctx.transcript is None or not ctx.transcript.segments:
+        report.complete("No transcript to refine")
+        return
+
+    terms = [t for t in ctx.video_context.key_terms if t.strip()]
+    if not terms:
+        report.complete("No names to apply")
+        return
+
+    providers = get_providers()
+    available, reason = providers.transcription.is_available()
+    if not available:
+        report.complete(f"Skipped: {reason}")
+        return
+
+    supplied = str(ctx.options.get("vocabulary", "")).strip()
+    vocabulary = ", ".join(part for part in (supplied, ", ".join(terms)) if part)
+
+    before = [w.word.strip() for w in ctx.transcript.words()]
+    try:
+        refined = providers.transcription.transcribe(
+            ctx.storage.audio_path,
+            vocabulary=vocabulary,
+            progress=lambda f, m: report.progress(f, m),
+        )
+    except Exception as exc:  # noqa: BLE001 - the first transcript is still good
+        log.warning("Refinement pass failed (%s); keeping the first transcript", exc)
+        report.complete("Kept the first transcript")
+        return
+
+    after = [w.word.strip() for w in refined.words()]
+
+    # A pass that loses a fifth of the words did not "correct" anything.
+    if len(before) and len(after) < len(before) * 0.8:
+        log.warning(
+            "Refinement produced %d words against %d; keeping the first transcript",
+            len(after),
+            len(before),
+        )
+        report.complete("Kept the first transcript")
+        return
+
+    matcher = difflib.SequenceMatcher(a=before, b=after, autojunk=False)
+    changed = sum(
+        max(i2 - i1, j2 - j1)
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes()
+        if tag != "equal"
+    )
+
+    ctx.transcript = refined
+    ctx.storage.write_json("transcript", refined)
+    log.info("Refined transcript with %d term(s): %d word(s) changed", len(terms), changed)
+    report.complete(f"{changed} word(s) corrected using {len(terms)} name(s)")
+
+
 def _stage_describe_clips(ctx: _Context, report: JobReporter) -> None:
     """Describe each clip in terms of the video it was cut from."""
     report.start("Describing clips")
@@ -839,6 +914,7 @@ STAGE_FUNCTIONS: dict[JobType, Callable[[_Context, JobReporter], None]] = {
     JobType.TRANSCRIBE: _stage_transcribe,
     JobType.DIARIZE: _stage_diarize,
     JobType.SUMMARIZE: _stage_summarize,
+    JobType.REFINE_TRANSCRIPT: _stage_refine_transcript,
     JobType.ANALYZE_SCENES: _stage_scenes,
     JobType.ANALYZE_AUDIO: _stage_audio_analysis,
     JobType.ANALYZE_VISUALS: _stage_visual_analysis,

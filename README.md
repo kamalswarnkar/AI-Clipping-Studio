@@ -38,6 +38,7 @@ validated and clamped, and a deterministic renderer performs every cut.
 | `TRANSCRIBE` | faster-whisper with **word-level** timestamps | moderate |
 | `DIARIZE` | MFCC embeddings + agglomerative clustering → Speaker A/B/C | cheap |
 | `SUMMARIZE` | Describes the whole video from its transcript, third person | moderate |
+| `REFINE_TRANSCRIPT` | Transcribes again, biased toward the names that summary found | moderate |
 | `ANALYZE_SCENES` | PySceneDetect shot boundaries on the proxy | cheap |
 | `ANALYZE_AUDIO` | loudness, silence, emphasis, laughter/applause | cheap |
 | `ANALYZE_VISUALS` | OpenCV faces, motion, exposure, and when the source shows captions of its own | cheap |
@@ -176,6 +177,7 @@ The settings you are most likely to change:
 | `VISION_ENABLED` | `false` | Vision costs ~25s per candidate. Conflict is detected far more cheaply from audio + speaker turns |
 | `WHISPER_MODEL` | `base` | ~2.8× faster than `small` with near-identical output. A bigger model does **not** reliably fix proper nouns — see below |
 | `WHISPER_VOCABULARY` | *(empty)* | Names and terms recurring across your videos, comma separated. Per-video names go in the upload screen instead |
+| `WHISPER_REFINE_PASS` | `true` | Transcribe a second time using the names the video's own summary found. Costs one extra pass |
 | `LLM_PARALLEL` | `3` | Concurrent Ollama requests |
 | `OPENING_WEIGHT` | `0.22` | How much the first 3 seconds count toward selection |
 | `CONFLICT_WEIGHT` | `0.18` | Weight for shouting / interruption / confrontation |
@@ -286,24 +288,35 @@ correctly, just undescribed.
 ## Getting names right
 
 Speech recognition mishears names it has no reason to know. On the test footage
-"Stop Nick Shirley Act" came out as *"Stop and make Shirley act"*, and a larger
-model did not save it — `small` produced *"stop and make surely act"* for 2.4×
-the transcription time.
+"Stop Nick Shirley Act" came out as *"Staten-Excherli Act"*, and a larger model
+does not save it — `small` produced *"stop and make surely act"* for 2.4× the
+transcription time. It does not know the name either; it mishears it more
+confidently.
 
-What does fix it is telling the recogniser the words exist. Whisper accepts
-biasing terms, and with `Nick Shirley, Stop Nick Shirley Act` supplied, `base`
-transcribes the line correctly with no speed cost at all.
+What fixes it is telling the recogniser the words exist. Whisper accepts
+biasing terms, and with `Stop Nick Shirley Act` supplied, `base` transcribes the
+line correctly at no cost at all — the biased run was marginally *faster*.
 
-So there are two places to put them:
+**You do not have to supply them.** A name mangled in one sentence is usually
+correct in another, because Whisper decodes each window independently. The
+video-level summary recovers the correct form from the first pass — it produced
+`Stop Nick Shirley Act AB-26-24` from a transcript that also contained
+*"the Stopnic Shirley Act"* — and `REFINE_TRANSCRIPT` then decodes once more
+with those names supplied. On the test video that corrected 728 words with
+nothing typed in, and every garbled variant of the name disappeared.
 
-- **Names and terms in this video** on the upload screen, for names specific to
-  one video.
-- `WHISPER_VOCABULARY` in `.env`, for names that recur across everything you
-  cut — a channel's regular subjects, your own brand names.
+The cost is one extra transcription pass, about 50 s on a 17-minute video. Set
+`WHISPER_REFINE_PASS=false` to skip it.
 
-Both are used together. Add a term whenever you see a name come out wrong;
-correcting the transcript fixes the burned-in captions and `Info.txt` at once,
-since both come from it.
+You can still supply names yourself, and they are used *as well as* the derived
+ones — worth doing for anything the video never says clearly enough for the
+first pass to get right anywhere:
+
+- **Names and terms in this video** on the upload screen, for one video.
+- `WHISPER_VOCABULARY` in `.env`, for names that recur across everything you cut.
+
+Correcting the transcript fixes the burned-in captions, `Info.txt` and the clip
+descriptions at once, since all three come from it.
 
 ## Aspect ratio
 
@@ -356,18 +369,19 @@ source producing **8 clips**:
 | Stage | Time |
 |---|---|
 | Ingest + proxy | 22 s |
-| Transcription (`base`, CPU int8) | 41 s |
+| Transcription (`base`, CPU int8) | 45 s |
 | Diarization | 1 s |
-| Video summary | 24 s |
-| Scene detection | 9 s |
+| Video summary | 21 s |
+| Name correction (second pass) | 50 s |
+| Scene detection | 8 s |
 | Audio analysis | 1 s |
-| Visual analysis (1013 frames) | 25 s |
-| Candidate generation | 3 s |
-| LLM evaluation (32 candidates) | 85 s |
-| Context validation | 18 s |
-| Clip descriptions (8 clips) | 23 s |
-| Rendering (8 clips) | 36 s |
-| **Total** | **4.8 min** |
+| Visual analysis (1013 frames) | 24 s |
+| Candidate generation | 2 s |
+| LLM evaluation (32 candidates) | 77 s |
+| Context validation | 19 s |
+| Clip descriptions (8 clips) | 25 s |
+| Rendering (8 clips) | 38 s |
+| **Total** | **5.5 min** |
 
 These are stage timings from one real run, not a projection. Expect the LLM
 stages to move around: evaluation alone has been measured anywhere from 74 s to
