@@ -1,23 +1,19 @@
 @echo off
-REM Start AI Clipping Studio. Builds the UI on first run.
+REM Start AI Clipping Studio: Ollama, the interface build, the server, the browser.
+REM Double-click this file, or run it from a terminal. Ctrl+C stops everything.
+setlocal
 cd /d "%~dp0"
 
-if not exist "venv\Scripts\python.exe" (
-    echo Virtual environment not found. Run:
-    echo   python -m venv venv
-    echo   venv\Scripts\python.exe -m pip install -r backend\requirements.txt
-    exit /b 1
-)
+set "PY=venv\Scripts\python.exe"
+if not exist "%PY%" set "PY=python"
 
-if not exist "frontend\dist\index.html" (
-    echo Building the interface...
-    pushd frontend
-    call npm install
-    call npm run build
-    popd
-)
+"%PY%" scripts\launch.py %*
+set "CODE=%ERRORLEVEL%"
 
-echo.
-echo   AI Clipping Studio  ->  http://127.0.0.1:8000
-echo.
-venv\Scripts\python.exe -m uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000
+REM Exit code 3 means the launcher printed something you need to read, so hold
+REM the window open. Any other code means it was simply stopped: close quietly.
+if "%CODE%"=="3" (
+    echo.
+    pause
+)
+exit /b %CODE%
