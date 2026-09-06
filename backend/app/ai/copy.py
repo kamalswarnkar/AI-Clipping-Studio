@@ -54,6 +54,59 @@ _NON_LATIN = re.compile(
 )
 
 
+# Emoji, pictographs, dingbats and the variation/ZWJ marks that join them.
+_EMOJI = re.compile(
+    "["
+    "\U0001f300-\U0001faff"  # pictographs, symbols, supplemental
+    "\u2600-\u27bf"          # misc symbols and dingbats
+    "\u2b00-\u2bff"
+    "\ufe0f\u200d"           # variation selector, zero-width joiner
+    "]"
+)
+
+# A hook with no emoji gets one that suits its category. The palette stays
+# small on purpose: a different emoji on every hook reads as decoration, and
+# these are the ones that match what this footage actually contains.
+_CATEGORY_EMOJI: dict[str, str] = {
+    "Shock": "😳",
+    "Curiosity": "👀",
+    "Conflict": "🚨",
+    "Emotional": "😶",
+    "Debate": "🗣️",
+    "Irony": "🙃",
+    "Suspense": "👀",
+    "One-Line Story": "🚨",
+    "Quote-Inspired": "💬",
+    "Action-Based": "🚨",
+    "Cinematic": "👀",
+    "High-Share Potential": "🔥",
+    "Controversial": "⚠️",
+}
+_DEFAULT_EMOJI = "🚨"
+
+
+def has_emoji(text: str) -> bool:
+    return bool(_EMOJI.search(text or ""))
+
+
+def strip_emoji(text: str) -> str:
+    """The words alone, for counting and for duplicate checks."""
+    return re.sub(r"\s+", " ", _EMOJI.sub("", text or "")).strip()
+
+
+def ensure_emoji(text: str, category: str = "") -> str:
+    """Guarantee the emoji the format calls for.
+
+    Asked for in the prompt as well, but a small model forgets on maybe a third
+    of the hooks, and "always" was the requirement -- so it is applied here
+    rather than hoped for.
+    """
+    text = (text or "").strip()
+    if not text or has_emoji(text):
+        return text
+    return f"{_CATEGORY_EMOJI.get(category, _DEFAULT_EMOJI)} {text}"
+
+
 def has_non_latin(text: str) -> bool:
     """True when the model has drifted out of the Latin alphabet."""
     return bool(_NON_LATIN.search(text or ''))
@@ -87,12 +140,12 @@ def hook_is_usable(text: str) -> tuple[bool, str]:
     """The checks hooks.txt states as rules, applied in code."""
     if not text:
         return False, "empty"
-    words = text.split()
+    words = strip_emoji(text).split()
     if len(words) < HOOK_MIN_WORDS:
         return False, f"too short ({len(words)} words)"
     if len(words) > HOOK_MAX_WORDS:
         return False, f"too long ({len(words)} words)"
-    lowered = text.lower()
+    lowered = strip_emoji(text).lower()
     for phrase in P.BANNED_HOOK_PHRASES:
         if phrase in lowered:
             return False, f"generic phrase {phrase!r}"
@@ -263,7 +316,7 @@ def generate_hooks(
         if not usable:
             log.debug("Rejected hook %r: %s", text, reason)
             continue
-        if text.lower() in taken:
+        if strip_emoji(text).lower() in taken:
             log.debug("Rejected hook %r: duplicate", text)
             continue
         category = str(item.get("category", "")).strip()
@@ -276,8 +329,8 @@ def generate_hooks(
                 (c for c in P.HOOK_CATEGORIES if c not in by_category), None
             )
         if match and match not in by_category:
-            by_category[match] = text
-            taken.add(text.lower())
+            by_category[match] = ensure_emoji(text, match)
+            taken.add(strip_emoji(text).lower())
 
     # A 7B model rarely delivers all thirteen in one answer. Three follow-up
     # rounds gets there most of the time; past that the returns stop justifying
@@ -302,7 +355,7 @@ def generate_hooks(
     hooks: list[Hook] = []
     for category in P.HOOK_CATEGORIES:
         text = by_category.get(category, "")
-        key = text.lower()
+        key = strip_emoji(text).lower()
         if not text or key in seen:
             continue
         seen.add(key)
@@ -313,6 +366,7 @@ def generate_hooks(
     if not usable:
         log.debug("Rejected best hook %r: %s", best, reason)
         best = hooks[0].text if hooks else ""
+    best = ensure_emoji(best)
 
     # The ranking must be a permutation of the hooks that survived.
     ranking = [
@@ -360,13 +414,13 @@ def _fill_missing_hooks(
         return {}
 
     filled: dict[str, str] = {}
-    taken = {e.lower() for e in existing}
+    taken = {strip_emoji(e).lower() for e in existing}
     for item in raw.get("hooks") or []:
         if not isinstance(item, dict):
             continue
         text = clean_hook(item.get("text", ""))
         usable, reason = hook_is_usable(text)
-        if not usable or text.lower() in taken:
+        if not usable or strip_emoji(text).lower() in taken:
             log.debug("Rejected fill-in hook %r: %s", text, reason or "duplicate")
             continue
         category = str(item.get("category", "")).strip()
@@ -374,8 +428,8 @@ def _fill_missing_hooks(
         if match is None:
             match = next((c for c in missing if c not in filled), None)
         if match and match not in filled:
-            filled[match] = text
-            taken.add(text.lower())
+            filled[match] = ensure_emoji(text, match)
+            taken.add(strip_emoji(text).lower())
     return filled
 
 

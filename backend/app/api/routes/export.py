@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import logging
+import re
+import unicodedata
+import urllib.parse
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -22,6 +25,27 @@ from ...services.storage import ProjectStorage, safe_stem
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/projects/{project_id}/export", tags=["export"])
+
+
+def content_disposition(filename: str) -> str:
+    """A Content-Disposition value that survives a non-ASCII filename.
+
+    HTTP headers are latin-1, so a source video called `... the "Stop Nick
+    Shirley Act" 720P.mp4` -- with typographic quotes -- makes the whole
+    response fail to encode, and the download 500s. RFC 5987 covers this: an
+    ASCII fallback for `filename`, and the real name percent-encoded in
+    `filename*`.
+    """
+    ascii_name = (
+        unicodedata.normalize("NFKD", filename)
+        .encode("ascii", "ignore")
+        .decode("ascii")
+        .strip()
+    )
+    # Quotes and backslashes would end the quoted string early.
+    ascii_name = re.sub(r'[\\"]', "", ascii_name) or "clips.zip"
+    quoted = urllib.parse.quote(filename, safe="")
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quoted}"
 
 
 def _build(project_id: str, clip_ids: list[str] | None) -> tuple[Path, int, str]:
@@ -119,5 +143,5 @@ def download_export(project_id: str):  # noqa: ANN201
         zip_path,
         media_type="application/zip",
         filename=filename,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": content_disposition(filename)},
     )

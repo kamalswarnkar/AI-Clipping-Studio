@@ -648,3 +648,94 @@ def test_caption_trimming_drops_whole_sentences() -> None:
     joined = " ".join(trimmed)
     assert "First sentence here." in joined
     assert joined.rstrip().endswith(".")
+
+
+def test_every_hook_carries_an_emoji() -> None:
+    """Asked for in the prompt too, but a small model forgets on roughly a
+    third of them, and "always" was the requirement."""
+    from app.ai.copy import ensure_emoji, has_emoji
+
+    assert has_emoji(ensure_emoji("He refused to answer and walked away", "Conflict"))
+    assert has_emoji(ensure_emoji("She walked away mid-question", "Shock"))
+    # An emoji the model already supplied is left where it put it.
+    assert ensure_emoji("👀 She confronted him", "Curiosity").startswith("👀")
+    assert ensure_emoji("He walked away 😳", "Shock").endswith("😳")
+
+
+def test_hook_length_and_duplicates_ignore_emoji() -> None:
+    """Emoji are decoration, not words. Counting them would reject hooks that
+    are the right length, and let near-identical hooks through as distinct."""
+    from app.ai.copy import hook_is_usable, strip_emoji
+
+    assert hook_is_usable("🚨 He refused to answer 😳")[0]
+    assert strip_emoji("🚨 He refused to answer 😳") == "He refused to answer"
+    assert strip_emoji("👀 He refused to answer") == strip_emoji("He refused to answer 😳")
+
+
+# ---------------------------------------------------------------------------
+# Truncated names
+# ---------------------------------------------------------------------------
+
+
+def _transcript_of(*sentences: str) -> Transcript:
+    segments = []
+    for i, text in enumerate(sentences):
+        words = text.split()
+        step = 0.4
+        base = i * 10.0
+        segments.append(
+            TranscriptSegment(
+                id=i,
+                start=base,
+                end=base + len(words) * step,
+                text=text,
+                words=[
+                    Word(word=w, start=base + n * step, end=base + (n + 1) * step)
+                    for n, w in enumerate(words)
+                ],
+            )
+        )
+    return Transcript(language="en", duration=100.0, segments=segments)
+
+
+def test_truncated_name_merges_into_the_form_the_video_prefers() -> None:
+    """Recognition drops leading syllables: the same rally says "Antifa" three
+    times and "Tifa" once, and the summary then reports two entities."""
+    from app.analysis.terms import apply_truncations, find_truncations
+
+    t = _transcript_of(
+        "And Tifa has already arrived at the Capitol.",
+        "He argued with Antifa and Antifa started to get wild.",
+        "The Antifa crowd only got louder.",
+    )
+    mapping = find_truncations(t)
+    assert mapping == {"tifa": "antifa"}
+    assert apply_truncations(t, mapping) == 1
+    assert "Tifa" not in t.text
+    assert t.text.count("Antifa") == 4
+
+
+def test_truncation_repair_leaves_ordinary_english_alone() -> None:
+    """The bare suffix rule also matches "public"/"republic" and
+    "rally"/"literally". Only words the transcript capitalises mid-sentence
+    are eligible, which is what keeps it off real words."""
+    from app.analysis.terms import find_truncations
+
+    t = _transcript_of(
+        "The public deserves better than this.",
+        "We are the republic and the republic holds.",
+        "That rally was literally the point, literally.",
+    )
+    assert find_truncations(t) == {}
+
+
+def test_truncation_repair_rewrites_free_text() -> None:
+    """The summary is built before the repair runs, so it carries the old
+    spelling into every caption written from it."""
+    from app.analysis.terms import apply_to_text
+
+    fixed = apply_to_text(
+        "Participants: Nick Shirley, Tifa, and members of Antifa.", {"tifa": "antifa"}
+    )
+    assert "Tifa" not in fixed
+    assert fixed.count("Antifa") == 2

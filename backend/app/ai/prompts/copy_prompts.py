@@ -87,7 +87,11 @@ Every hook must be specific to THIS clip. If a hook could describe hundreds of
 unrelated videos, it is wrong -- write a more specific one.
 
 Rules for every hook:
-- 4 to 9 words. Never sacrifice clarity to be shorter.
+- Carry one or two emoji, at the start, at the end, or both. Choose emoji that
+  match what actually happens: 🚨 for confrontation or alarm, 👀 for something
+  worth looking at, 😳 for shock, 😶 for a stunned or speechless reaction, 🔥 😤
+  💬 ⚠️ where they fit. Never decorate with an emoji the clip does not earn.
+- 4 to 9 words, not counting emoji. Never sacrifice clarity to be shorter.
 - Concrete actions and strong verbs: {", ".join(PREFERRED_VERBS[:12])}.
 - Create an information gap. Do not reveal the outcome.
 - Do not exaggerate, and do not call something shocking unless the material
@@ -95,15 +99,15 @@ Rules for every hook:
 - No generic clickbait: {", ".join(repr(p) for p in BANNED_HOOK_PHRASES[:6])}.
 
 BAD: "Political argument gets heated"
-BETTER: "He refused to answer, then walked away"
+BETTER: "🚨 He refused to answer, then walked away"
 BAD: "People argue at a protest"
-BETTER: "She confronted him in front of the crowd"
+BETTER: "She confronted him in front of the crowd 😳"
 """.strip()
 
 HOOKS_SCHEMA = {
     "type": "object",
     "properties": {
-        "best_hook": {"type": "string", "minLength": 12, "maxLength": 90},
+        "best_hook": {"type": "string", "minLength": 12, "maxLength": 110},
         "hooks": {
             "type": "array",
             "minItems": 13,
@@ -112,7 +116,7 @@ HOOKS_SCHEMA = {
                 "type": "object",
                 "properties": {
                     "category": {"type": "string", "maxLength": 24},
-                    "text": {"type": "string", "minLength": 12, "maxLength": 90},
+                    "text": {"type": "string", "minLength": 12, "maxLength": 110},
                 },
                 "required": ["category", "text"],
             },
@@ -270,7 +274,7 @@ MISSING_HOOKS_SCHEMA = {
                 "type": "object",
                 "properties": {
                     "category": {"type": "string", "maxLength": 24},
-                    "text": {"type": "string", "minLength": 12, "maxLength": 90},
+                    "text": {"type": "string", "minLength": 12, "maxLength": 110},
                 },
                 "required": ["category", "text"],
             },
@@ -310,7 +314,8 @@ Write one hook for each of these categories, and no others:
 {wanted}
 
 Set `category` to the category name exactly as written above. 4 to 9 words each,
-third person, specific to this clip.
+third person, specific to this clip, each carrying one or two emoji at the start,
+the end, or both.
 
 JSON only.
 """.strip()
