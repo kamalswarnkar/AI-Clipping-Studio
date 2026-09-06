@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import type { Clip, Project } from "../api/types";
 import { ErrorPanel, Spinner } from "../components/Common";
-import { clipAspect, timecode } from "../lib/format";
+import { clipAspect, copyText, timecode } from "../lib/format";
 
 function InfoRow({ label, value }: { label: string; value: string }) {
   return (
@@ -198,6 +198,45 @@ export default function ClipDetail({
                   Leans on context from elsewhere in the video.
                 </p>
               )}
+            </section>
+          )}
+
+          {clip.best_hook && (
+            <section className="mb-8">
+              <div className="label mb-2">Best hook</div>
+              <p className="panel px-4 py-3 text-[13px] leading-relaxed text-ink-100">
+                {clip.best_hook}
+              </p>
+              {clip.hooks.length > 0 && (
+                <details className="mt-2">
+                  <summary className="cursor-pointer list-none text-xs text-ink-500 hover:text-ink-300">
+                    All {clip.hooks.length} hooks
+                  </summary>
+                  <ul className="panel mt-2 divide-y divide-ink-850 px-4 py-1">
+                    {clip.hooks.map((hook) => (
+                      <li key={hook.category} className="py-2 text-[13px]">
+                        <span className="text-ink-500">{hook.category}: </span>
+                        <span className="text-ink-200">{hook.text}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+            </section>
+          )}
+
+          {clip.caption && (
+            <section className="mb-8">
+              <div className="label mb-2">Caption</div>
+              <p className="panel whitespace-pre-line px-4 py-3 text-[13px] leading-relaxed text-ink-200">
+                {clip.caption}
+              </p>
+              <button
+                className="btn-ghost mt-2 -ml-2 text-xs"
+                onClick={() => copyText(clip.caption)}
+              >
+                Copy caption
+              </button>
             </section>
           )}
 

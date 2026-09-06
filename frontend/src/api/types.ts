@@ -82,6 +82,9 @@ export interface Clip {
   context_dependency: string;
   context: string;
   standalone: boolean;
+  best_hook: string;
+  hooks: { category: string; text: string; rank: number }[];
+  caption: string;
   score: number;
   speakers: string[];
   render_status: "pending" | "rendering" | "completed" | "failed";

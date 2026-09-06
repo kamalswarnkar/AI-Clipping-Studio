@@ -32,6 +32,7 @@ from app.main import configure_logging  # noqa: E402
 from app.models.db import Project, get_session, init_db  # noqa: E402
 from app.models.domain import (  # noqa: E402
     ClipPlan,
+    Hook,
     ContextDependency,
     ScoreBreakdown,
 )
@@ -149,6 +150,9 @@ def main() -> int:
                     breakdown=ScoreBreakdown(**(clip.breakdown or {})),
                     context=clip.context or "",
                     standalone=bool(clip.standalone),
+                    best_hook=clip.best_hook or "",
+                    hooks=[Hook(**h) for h in clip.hooks],
+                    caption=clip.caption or "",
                 )
                 video = Path(clip.video_path) if clip.video_path else None
                 items.append((plan, video if video and video.exists() else None))

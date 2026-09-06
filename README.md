@@ -47,6 +47,7 @@ validated and clamped, and a deterministic renderer performs every cut.
 | `VALIDATE` | context check, filler trim, dedupe, sentence-boundary snap | moderate |
 | `DESCRIBE_CLIPS` | Describes each clip against the video's own context | moderate |
 | `RENDER` | trim → optional 9:16 reframe → loudnorm → burn captions → H.264 | moderate |
+| `WRITE_COPY` | watches each rendered clip, then writes 13 hooks and a caption | **expensive** |
 
 Only the strongest candidates reach the expensive stages. That staging is what
 keeps a 90-minute video tractable on a desktop GPU.
@@ -182,6 +183,8 @@ The settings you are most likely to change:
 | `OPENING_WEIGHT` | `0.22` | How much the first 3 seconds count toward selection |
 | `CONFLICT_WEIGHT` | `0.18` | Weight for shouting / interruption / confrontation |
 | `RENDER_WORKERS` | `3` | Parallel clip renders |
+| `COPY_VISION_ENABLED` | `true` | Watch each rendered clip before writing its hooks and caption. ~28 s per clip |
+| `COPY_VISION_FRAMES` | `3` | Frames sampled from each clip for that |
 | `SUBTITLE_FONT_SIZE` | `120` | Caption size for a 1920-tall frame, scaled to the real output. About 6% of frame height |
 | `RENDER_WIDTH` / `RENDER_HEIGHT` | `1080` / `1920` | Only used when a project asks for the 9:16 crop |
 | `REMOVE_SOURCE_SUBTITLES` | `true` | Detect captions already burned into the source. The 9:16 crop removes that band; at the original ratio the app's own captions are placed above it |
@@ -210,7 +213,9 @@ silently.
 ├── About.txt            what the source video is
 ├── Clip_01/
 │   ├── Clip_01.mp4      subtitled, loudness-normalised, source aspect ratio
+│   ├── Caption.txt      the finished Reel caption
 │   ├── Context.txt      what the clip is, in the third person
+│   ├── Hooks.txt        best hook, 13 categorised hooks, final ranking
 │   └── Info.txt         the clip transcript, nothing else
 ├── Clip_02/
 └── ...
@@ -284,6 +289,61 @@ was about.
 
 Both stages are optional. If Ollama is unavailable the clips are still cut
 correctly, just undescribed.
+
+## Hooks and captions
+
+Every clip gets a `Hooks.txt` and a `Caption.txt`, in the exact formats
+`hooks.txt` and `caption.txt` specify — a best hook, thirteen hooks by category,
+a final ranking, and a caption built as TRIGGER → ESCALATION → DIVISION →
+DEBATE with a headline, a forced-choice question, an optional location and
+exactly five hashtags.
+
+**The clip itself is the primary source, as the spec says it should be.**
+`WRITE_COPY` runs *after* `RENDER`, so the clip exists as a file: the vision
+model watches three frames spread across it and describes what is visible, and
+that description is what the writing prompts receive first, with the transcript
+as the secondary source for dialogue and names.
+
+It shows. Hooks like "He interrupted her mid-sentence, grabbing the microphone"
+and "She confronted him in front of the crowd" describe things the transcript
+never mentions.
+
+The clip's own description from `DESCRIBE_CLIPS` goes in too, which is itself
+written against the whole video. That chain is what lets a hook name the bill
+or the person the clip only calls "it".
+
+**The model is asked for the pieces, and the layout is assembled in code.** A
+7B model reproducing emoji headers, separators, thirteen numbered categories and
+a ranking block gets it wrong often enough to be unusable, and the template is
+fixed, so it belongs in code. What the model returns is treated as a proposal
+and checked:
+
+- Hooks outside 4–12 words, containing a banned generic phrase, written in the
+  first person, or duplicating another hook are rejected. First person is
+  checked outside quotation marks, so a Quote-Inspired hook can still quote
+  someone saying "I".
+- Missing categories are re-requested, up to three follow-up rounds. A 7B model
+  rarely delivers all thirteen in one answer; it usually gets there in two.
+- The ranking is repaired if it is not a permutation of the hooks that survived.
+- Captions are capped at 190 words, trimmed by dropping whole sentences rather
+  than cutting mid-sentence, and forced to exactly five hashtags. A location is
+  printed only if it matches "City, State" — never guessed.
+- Output that drifts out of English is discarded and retried. Small models
+  switch language near the token limit, which nothing else would catch: one
+  caption ended "...or was he just trying to draw 注意力". A question that comes
+  back without its question mark is treated the same way, because it means the
+  answer was cut off mid-word.
+
+The two passes are kept apart deliberately: every clip is watched, and *then*
+every clip is written. The text model is 4.7 GB and the vision model 6 GB, which
+do not both fit in 8 GB of VRAM — interleaving them per clip would swap models
+on every call. Watching everything first costs one swap.
+
+This is the most expensive stage in the pipeline: roughly 28 s to watch each
+clip plus two writing calls and any follow-up rounds, about 400 s for 6 clips.
+Set `COPY_VISION_ENABLED=false` to skip the watching and write from the
+transcript and context alone, which is roughly four times faster and noticeably
+less specific.
 
 ## Getting names right
 
@@ -364,24 +424,25 @@ Sources without burned-in captions are left untouched. Set
 ## Performance
 
 Measured on an i5-14400F with an RX 6650 XT (8 GB, ROCm), on a **16.9-minute**
-source producing **8 clips**:
+source producing **6 clips**:
 
 | Stage | Time |
 |---|---|
 | Ingest + proxy | 22 s |
-| Transcription (`base`, CPU int8) | 45 s |
+| Transcription (`base`, CPU int8) | 51 s |
 | Diarization | 1 s |
-| Video summary | 21 s |
-| Name correction (second pass) | 50 s |
+| Video summary | 34 s |
+| Name correction (second pass) | 48 s |
 | Scene detection | 8 s |
 | Audio analysis | 1 s |
-| Visual analysis (1013 frames) | 24 s |
+| Visual analysis (1013 frames) | 28 s |
 | Candidate generation | 2 s |
-| LLM evaluation (32 candidates) | 77 s |
-| Context validation | 19 s |
-| Clip descriptions (8 clips) | 25 s |
-| Rendering (8 clips) | 38 s |
-| **Total** | **5.5 min** |
+| LLM evaluation (32 candidates) | 116 s |
+| Context validation | 20 s |
+| Clip descriptions | 23 s |
+| Hooks and captions, clips watched | 401 s |
+| Rendering | 23 s |
+| **Total** | **12.9 min** |
 
 These are stage timings from one real run, not a projection. Expect the LLM
 stages to move around: evaluation alone has been measured anywhere from 74 s to

@@ -563,3 +563,88 @@ def test_clip_context_drops_restated_prompt_openers() -> None:
 
     assert _clean("In this clip, a protester objects.") == "A protester objects."
     assert _clean("Context: the rally continues.") == "The rally continues."
+
+
+# ---------------------------------------------------------------------------
+# Hooks and captions
+# ---------------------------------------------------------------------------
+
+
+def test_hook_rejects_generic_clickbait() -> None:
+    from app.ai.copy import hook_is_usable
+
+    assert not hook_is_usable("You won't believe what he said next")[0]
+    assert not hook_is_usable("Things got heated at the rally today")[0]
+    assert hook_is_usable("He refused to answer and walked away")[0]
+
+
+def test_hook_rejects_first_person_but_allows_quotes() -> None:
+    """A Quote-Inspired hook legitimately contains "I" inside quotation marks.
+
+    Only the narration has to be third person, so the check looks outside the
+    quotes.
+    """
+    from app.ai.copy import hook_is_usable
+
+    assert not hook_is_usable("I confronted him about the bill")[0]
+    assert hook_is_usable('"I would take a bullet for him," she said')[0]
+
+
+def test_hook_rejects_length_extremes() -> None:
+    from app.ai.copy import hook_is_usable
+
+    assert not hook_is_usable("He refused")[0]
+    assert not hook_is_usable(
+        "He refused to answer the question and then walked away from the crowd entirely"
+    )[0]
+
+
+def test_copy_rejects_drift_out_of_english() -> None:
+    """Small models switch language near the token limit, which is otherwise
+    invisible: the output is well-formed, just unusable."""
+    from app.ai.copy import has_non_latin, hook_is_usable
+
+    assert has_non_latin("or was he just trying to draw \u6ce8\u610f\u529b")
+    assert not has_non_latin("He refused to answer and walked away")
+    assert not hook_is_usable("He said \u6ce8\u610f about the bill")[0]
+
+
+def test_clean_hook_strips_model_decorations() -> None:
+    from app.ai.copy import clean_hook
+
+    assert clean_hook("3. Conflict: He confronted her") == "He confronted her"
+    assert clean_hook('"She walked away from him"') == "She walked away from him"
+
+
+def test_hooks_txt_matches_the_specified_layout() -> None:
+    from app.ai.copy import render_hooks_txt
+    from app.models.domain import ClipCopy, Hook
+
+    copy = ClipCopy(
+        best_hook="He refused to answer and walked away",
+        hooks=[
+            Hook(category="Shock", text="He refused to answer", rank=2),
+            Hook(category="Curiosity", text="Why did she walk away", rank=1),
+        ],
+    )
+    text = render_hooks_txt(copy)
+    assert text.startswith("\U0001f3c6 BEST HOOK")
+    assert "1. Shock: He refused to answer" in text
+    assert "2. Curiosity: Why did she walk away" in text
+    # The ranking is ordered by rank, not by category order.
+    ranking = text.split("FINAL RANKING")[1]
+    assert ranking.index("Why did she walk away") < ranking.index("He refused to answer")
+
+
+def test_caption_trimming_drops_whole_sentences() -> None:
+    """Cutting mid-sentence to hit a word count is worse than a shorter caption."""
+    from app.ai.copy import _trim_to_words
+
+    paragraphs = [
+        "First sentence here. Second sentence here. Third sentence here.",
+        "Another paragraph entirely.",
+    ]
+    trimmed = _trim_to_words(list(paragraphs), "Was he right?", 12)
+    joined = " ".join(trimmed)
+    assert "First sentence here." in joined
+    assert joined.rstrip().endswith(".")

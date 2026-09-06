@@ -12,6 +12,7 @@ from ...exporters.files import build_export_tree, zip_directory
 from ...models.db import Clip, Project, get_session
 from ...models.domain import (
     ClipPlan,
+    Hook,
     ContextDependency,
     RenderStatus,
     ScoreBreakdown,
@@ -58,6 +59,9 @@ def _build(project_id: str, clip_ids: list[str] | None) -> tuple[Path, int, str]
                 breakdown=ScoreBreakdown(**(clip.breakdown or {})),
                 context=clip.context or "",
                 standalone=bool(clip.standalone),
+                best_hook=clip.best_hook or "",
+                hooks=[Hook(**h) for h in clip.hooks],
+                caption=clip.caption or "",
             )
             video = Path(clip.video_path) if clip.video_path else None
             if video is not None and not video.exists():

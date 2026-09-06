@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from ..ai import context as context_ai
+from ..ai import copy as copy_ai
 from ..ai import evaluation
 from ..ai.registry import get_providers
 from ..ai.vision import analyzer as vision_analyzer
@@ -838,6 +839,111 @@ def _stage_describe_clips(ctx: _Context, report: JobReporter) -> None:
     report.complete(f"{described}/{len(ctx.plans)} described")
 
 
+def _stage_write_copy(ctx: _Context, report: JobReporter) -> None:
+    """Write hooks and a caption for every clip, from the clip itself.
+
+    `hooks.txt` and `caption.txt` both name the video as the primary source of
+    truth and the transcript as secondary. A text model cannot watch anything,
+    so this runs after RENDER -- when the clip exists as a file -- and every
+    clip is watched by the vision model before anything is written.
+
+    The two passes are kept apart on purpose. The text model is 4.7 GB and the
+    vision model 6 GB, which do not both fit in 8 GB of VRAM: interleaving them
+    per clip would swap models on every call. Watching every clip first and then
+    writing every clip costs one swap.
+    """
+    report.start("Writing hooks and captions")
+    if not ctx.plans:
+        report.complete("No clips to write for")
+        return
+
+    providers = get_providers()
+    llm_ok, reason = providers.llm.is_available()
+    if not llm_ok:
+        report.complete(f"Skipped: {reason}")
+        return
+
+    # --- pass 1: watch the clips ------------------------------------------
+    seen: dict[int, str] = {}
+    if ctx.settings.copy_vision_enabled:
+        vision_ok, vision_reason = providers.vision.is_available()
+        if not vision_ok:
+            log.info("Not watching clips (%s); writing from transcript only", vision_reason)
+        else:
+            with get_session() as session:
+                paths = {
+                    clip.index: clip.video_path
+                    for clip in session.query(Clip)
+                    .filter(Clip.project_id == ctx.project_id)
+                    .all()
+                }
+            for position, plan in enumerate(ctx.plans, start=1):
+                queue.raise_if_cancelled(ctx.project_id)
+                raw_path = paths.get(plan.index)
+                if not raw_path:
+                    continue
+                description = copy_ai.watch_clip(
+                    video_path=Path(raw_path),
+                    duration=plan.duration,
+                    frames=ctx.settings.copy_vision_frames,
+                    vision=providers.vision,
+                    workdir=ctx.storage.analysis_dir / "copy_frames",
+                )
+                if description:
+                    seen[plan.index] = description
+                report.progress(
+                    0.5 * position / len(ctx.plans), f"watched {len(seen)} clip(s)"
+                )
+            log.info("Watched %d/%d clips", len(seen), len(ctx.plans))
+
+    # --- pass 2: write ----------------------------------------------------
+    workers = max(1, min(ctx.settings.llm_parallel, len(ctx.plans)))
+    written = 0
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="copy") as pool:
+        futures = {
+            pool.submit(
+                copy_ai.write_copy,
+                context=plan.context,
+                transcript=plan.transcript,
+                video_context=ctx.video_context,
+                llm=providers.llm,
+                seen=seen.get(plan.index, ""),
+            ): plan
+            for plan in ctx.plans
+        }
+        for future in as_completed(futures):
+            plan = futures[future]
+            try:
+                copy = future.result()
+            except Exception as exc:  # noqa: BLE001 - copy is not the product
+                log.warning("Could not write copy for %s: %s", plan.name, exc)
+                copy = None
+            if copy is not None:
+                plan.best_hook = copy.best_hook
+                plan.hooks = copy.hooks
+                plan.caption = copy.caption
+                written += 1
+            report.progress(
+                0.5 + 0.5 * written / len(ctx.plans), f"{written} written"
+            )
+
+    with get_session() as session:
+        for plan in ctx.plans:
+            clip = (
+                session.query(Clip)
+                .filter(Clip.project_id == ctx.project_id, Clip.index == plan.index)
+                .first()
+            )
+            if clip is not None:
+                clip.best_hook = plan.best_hook
+                clip.hooks = [h.model_dump() for h in plan.hooks]
+                clip.caption = plan.caption
+        session.commit()
+
+    watched = f", {len(seen)} watched" if seen else ""
+    report.complete(f"{written}/{len(ctx.plans)} clips written{watched}")
+
+
 def _stage_render(ctx: _Context, report: JobReporter) -> None:
     report.start("Rendering clips")
     if not ctx.plans:
@@ -923,6 +1029,7 @@ STAGE_FUNCTIONS: dict[JobType, Callable[[_Context, JobReporter], None]] = {
     JobType.VALIDATE: _stage_validate,
     JobType.DESCRIBE_CLIPS: _stage_describe_clips,
     JobType.RENDER: _stage_render,
+    JobType.WRITE_COPY: _stage_write_copy,
 }
 
 

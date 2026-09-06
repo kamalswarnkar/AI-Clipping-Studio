@@ -83,6 +83,9 @@ class ClipResponse(BaseModel):
     context_dependency: str = "low"
     context: str = ""
     standalone: bool = False
+    best_hook: str = ""
+    hooks: list[dict[str, Any]] = Field(default_factory=list)
+    caption: str = ""
     score: float = 0.0
     speakers: list[str] = Field(default_factory=list)
     render_status: str = "pending"
@@ -109,6 +112,9 @@ class ClipResponse(BaseModel):
             context_dependency=row.context_dependency or "low",
             context=row.context or "",
             standalone=bool(row.standalone),
+            best_hook=row.best_hook or "",
+            hooks=row.hooks,
+            caption=row.caption or "",
             score=round(row.score, 4),
             speakers=row.speakers,
             render_status=row.render_status,

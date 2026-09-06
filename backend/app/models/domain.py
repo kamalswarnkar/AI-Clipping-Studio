@@ -344,6 +344,33 @@ class RenderStatus(str, Enum):
 
 
 
+class Hook(BaseModel):
+    """One hook, in one of the categories hooks.txt defines."""
+
+    category: str
+    text: str
+    rank: int = 0
+
+
+class ClipCopy(BaseModel):
+    """Publishing copy for one clip: hooks and a finished caption."""
+
+    best_hook: str = ""
+    hooks: list[Hook] = Field(default_factory=list)
+    caption: str = ""
+
+    @property
+    def ranked_hooks(self) -> list["Hook"]:
+        """Hooks strongest first. Unranked entries sort last, in place."""
+        return sorted(
+            self.hooks, key=lambda h: (h.rank if h.rank else 10_000, h.category)
+        )
+
+    @property
+    def is_empty(self) -> bool:
+        return not (self.hooks or self.caption)
+
+
 class VideoContext(BaseModel):
     """What the source video is, described in the third person.
 
@@ -409,6 +436,10 @@ class ClipPlan(BaseModel):
     # context so it can name what the clip only alludes to.
     context: str = ""
     standalone: bool = False
+    # Publishing copy, written from the transcript and the clip's context.
+    best_hook: str = ""
+    hooks: list[Hook] = Field(default_factory=list)
+    caption: str = ""
 
     @property
     def duration(self) -> float:

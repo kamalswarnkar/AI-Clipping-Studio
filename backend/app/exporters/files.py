@@ -13,7 +13,8 @@ import zipfile
 from pathlib import Path
 from typing import Iterable, Optional
 
-from ..models.domain import ClipPlan
+from ..ai.copy import render_caption_txt, render_hooks_txt
+from ..models.domain import ClipCopy, ClipPlan
 from ..services.storage import safe_stem
 
 log = logging.getLogger(__name__)
@@ -61,6 +62,16 @@ def write_clip_folder(
     if plan.context:
         (folder / "Context.txt").write_text(
             render_context_txt(plan), encoding="utf-8"
+        )
+
+    copy = ClipCopy(
+        best_hook=plan.best_hook, hooks=plan.hooks, caption=plan.caption
+    )
+    if copy.hooks:
+        (folder / "Hooks.txt").write_text(render_hooks_txt(copy), encoding="utf-8")
+    if copy.caption:
+        (folder / "Caption.txt").write_text(
+            render_caption_txt(copy), encoding="utf-8"
         )
     return folder
 

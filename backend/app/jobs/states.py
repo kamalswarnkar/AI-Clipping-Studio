@@ -27,6 +27,7 @@ class JobType(str, Enum):
     VALIDATE = "VALIDATE"
     DESCRIBE_CLIPS = "DESCRIBE_CLIPS"
     RENDER = "RENDER"
+    WRITE_COPY = "WRITE_COPY"
     PACKAGE_EXPORT = "PACKAGE_EXPORT"
 
 
@@ -73,7 +74,9 @@ PIPELINE_ORDER: tuple[JobType, ...] = (
     JobType.LLM_EVALUATE,
     JobType.VALIDATE,
     JobType.DESCRIBE_CLIPS,
+    # After rendering: the clip file is what the copy is written from.
     JobType.RENDER,
+    JobType.WRITE_COPY,
 )
 
 # Human-facing labels for the processing screen.
@@ -92,6 +95,7 @@ JOB_LABELS: dict[JobType, str] = {
     JobType.VALIDATE: "Validating context",
     JobType.DESCRIBE_CLIPS: "Describing clips",
     JobType.RENDER: "Rendering clips",
+    JobType.WRITE_COPY: "Writing hooks and captions",
     JobType.PACKAGE_EXPORT: "Packaging export",
 }
 
@@ -108,6 +112,7 @@ OPTIONAL_JOBS: frozenset[JobType] = frozenset(
         JobType.SUMMARIZE,
         JobType.REFINE_TRANSCRIPT,
         JobType.DESCRIBE_CLIPS,
+        JobType.WRITE_COPY,
     }
 )
 

@@ -207,10 +207,21 @@ class Clip(Base, JSONMixin):
     # What this clip is, written against the video's own context.
     context: Mapped[str] = mapped_column(Text, default="")
     standalone: Mapped[bool] = mapped_column(Boolean, default=False)
+    best_hook: Mapped[str] = mapped_column(Text, default="")
+    hooks_json: Mapped[str] = mapped_column(Text, default="[]")
+    caption: Mapped[str] = mapped_column(Text, default="")
     score: Mapped[float] = mapped_column(Float, default=0.0)
 
     speakers_json: Mapped[Optional[str]] = mapped_column(Text, default=None)
     breakdown_json: Mapped[Optional[str]] = mapped_column(Text, default=None)
+
+    @property
+    def hooks(self) -> list[dict[str, Any]]:
+        return self._load(self.hooks_json, [])
+
+    @hooks.setter
+    def hooks(self, value: list[dict[str, Any]]) -> None:
+        self.hooks_json = self._dump(value)
 
     render_status: Mapped[str] = mapped_column(
         String(24), default=RenderStatus.PENDING.value
