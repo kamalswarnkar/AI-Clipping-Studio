@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { Disclaimer } from "./components/Common";
 import ClipDetail from "./screens/ClipDetail";
 import Processing from "./screens/Processing";
 import Results from "./screens/Results";
@@ -50,35 +51,47 @@ export default function App() {
     navigate(`/p/${projectId}/clips`);
   }, []);
 
-  switch (view.name) {
-    case "processing":
-      return (
-        <Processing
-          projectId={view.projectId}
-          onComplete={() => goResults(view.projectId)}
-          onCancel={() => navigate("/")}
-        />
-      );
+  const screen = () => {
+    switch (view.name) {
+      case "processing":
+        return (
+          <Processing
+            projectId={view.projectId}
+            onComplete={() => goResults(view.projectId)}
+            onCancel={() => navigate("/")}
+          />
+        );
 
-    case "results":
-      return (
-        <Results
-          projectId={view.projectId}
-          onOpenClip={(clipId) => navigate(`/p/${view.projectId}/c/${clipId}`)}
-          onNewProject={() => navigate("/")}
-        />
-      );
+      case "results":
+        return (
+          <Results
+            projectId={view.projectId}
+            onOpenClip={(clipId) => navigate(`/p/${view.projectId}/c/${clipId}`)}
+            onNewProject={() => navigate("/")}
+          />
+        );
 
-    case "clip":
-      return (
-        <ClipDetail
-          projectId={view.projectId}
-          clipId={view.clipId}
-          onBack={() => goResults(view.projectId)}
-        />
-      );
+      case "clip":
+        return (
+          <ClipDetail
+            projectId={view.projectId}
+            clipId={view.clipId}
+            onBack={() => goResults(view.projectId)}
+          />
+        );
 
-    default:
-      return <Upload onStarted={(projectId) => navigate(`/p/${projectId}`)} />;
-  }
+      default:
+        return <Upload onStarted={(projectId) => navigate(`/p/${projectId}`)} />;
+    }
+  };
+
+  // One notice for the whole app rather than one per screen: it applies to
+  // everything the app produces, and a reader should not be able to miss it by
+  // taking a different route through the UI.
+  return (
+    <>
+      {screen()}
+      <Disclaimer />
+    </>
+  );
 }

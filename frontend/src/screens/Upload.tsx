@@ -149,7 +149,7 @@ export default function Upload({
   const llmDown = health && !health.providers.llm?.available;
 
   return (
-    <div className="mx-auto flex min-h-screen max-w-2xl flex-col justify-center px-6 py-16">
+    <div className="mx-auto flex min-h-[calc(100vh-4.5rem)] max-w-2xl flex-col justify-center px-6 py-16">
       <LogoWatermark />
 
       <header className="mb-12">

@@ -118,7 +118,7 @@ export default function Processing({
   const cancelled = status?.status === "cancelled";
 
   return (
-    <div className="mx-auto flex min-h-screen max-w-3xl flex-col justify-center px-6 py-16">
+    <div className="mx-auto flex min-h-[calc(100vh-4.5rem)] max-w-3xl flex-col justify-center px-6 py-16">
       <header className="mb-10 flex items-baseline justify-between">
         <Logo subtitle={status?.current_stage || "Preparing"} />
         <span className="text-xs tabular-nums text-ink-500">

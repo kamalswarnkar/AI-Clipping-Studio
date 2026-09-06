@@ -564,3 +564,10 @@ The database migrates itself on startup: `init_db` adds columns a model has
 gained but the file lacks. This is a double-click app — there is no migration
 command for a user to run, and without it every query fails with "no such
 column" after an upgrade.
+
+---
+
+> **AI can make mistakes.** Everything this produces — the clip boundaries, the
+> subtitles, the descriptions, the hooks and the captions — comes from models
+> that are wrong often enough to matter. Review every clip and every line of
+> copy before publishing it anywhere.

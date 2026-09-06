@@ -189,3 +189,19 @@ export function EmptyState({
     </div>
   );
 }
+
+/**
+ * Shown on every screen. The app produces publishable material -- clips,
+ * hooks, captions -- from models that are wrong often enough to matter, so the
+ * reminder belongs where the work is reviewed, not buried in the README.
+ */
+export function Disclaimer() {
+  return (
+    <footer className="mx-auto max-w-5xl px-6 pb-10 pt-4">
+      <p className="border-t border-ink-850 pt-4 text-center text-[11px] leading-relaxed text-ink-500">
+        AI can make mistakes. Review every clip, hook and caption before
+        publishing it.
+      </p>
+    </footer>
+  );
+}

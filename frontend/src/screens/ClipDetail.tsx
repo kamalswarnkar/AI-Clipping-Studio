@@ -62,7 +62,7 @@ export default function ClipDetail({
 
   if (!clip) {
     return (
-      <div className="flex min-h-screen items-center justify-center">
+      <div className="flex min-h-[calc(100vh-4.5rem)] items-center justify-center">
         {error ? (
           <ErrorPanel error={{ message: error, stage: "", remedy: "" }} onRetry={onBack} />
         ) : (

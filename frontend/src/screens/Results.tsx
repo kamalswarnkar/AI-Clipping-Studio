@@ -157,7 +157,7 @@ export default function Results({
 
   if (!clips) {
     return (
-      <div className="flex min-h-screen items-center justify-center">
+      <div className="flex min-h-[calc(100vh-4.5rem)] items-center justify-center">
         <Spinner />
       </div>
     );
