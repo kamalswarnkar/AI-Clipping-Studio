@@ -267,12 +267,13 @@ itself only calls "it" — the transcript alone cannot supply that.
 
 ### Hooks and captions
 
-Every clip gets a `Hooks.txt` and a `Caption.txt` in the exact formats specified by
-`hooks.txt` and `caption.txt` — the prompt briefs kept in the project root: a best hook,
-thirteen hooks by category, a final ranking, and a caption built as
-TRIGGER → ESCALATION → DIVISION → DEBATE with a headline, a forced-choice
-question, an optional location and exactly five hashtags. Third person
-throughout, capped at 190 words.
+Every clip gets a `Hooks.txt` and a `Caption.txt` in the exact formats set out
+by [`hooks.txt`](hooks.txt) and [`caption.txt`](caption.txt) — the prompt briefs
+that define this feature, kept in the repository beside the code that implements
+them. A best hook, thirteen hooks by category, a final ranking, and a caption
+built as TRIGGER → ESCALATION → DIVISION → DEBATE with a headline, a
+forced-choice question, an optional location and exactly five hashtags. Third
+person throughout, capped at 190 words.
 
 **The clip itself is the primary source**, as those specs require. `WRITE_COPY`
 runs *after* `RENDER`, so the clip exists as a file: the vision model watches

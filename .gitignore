@@ -25,7 +25,5 @@ Thumbs.db
 .pytest_cache/
 frontend/tsconfig.tsbuildinfo
 sample.mp4 
-hooks.txt 
-caption.txt 
 Memory.md 
 examples/ 
